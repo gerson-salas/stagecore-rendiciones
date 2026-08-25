@@ -317,12 +317,9 @@ function vCaptura(){
     <div class="pad" style="padding-bottom:0">
       ${c.foto
         ? `<img src="${c.foto}" alt="" style="width:100%;max-height:210px;object-fit:cover;border-radius:14px;border:1px solid #22252a">
-           <div class="row" style="gap:10px;margin-top:10px">
-             <button data-a="foto" class="btn ghost">Tomar otra</button>
-             <button data-a="galeria" class="btn ghost">Elegir de la galería</button></div>`
-        : `<button data-a="foto" class="btn" style="padding:20px">Tomar foto de la boleta</button>
-           <button data-a="galeria" class="btn ghost" style="margin-top:10px">Elegir una imagen del teléfono</button>
-           <div class="hint" style="margin-top:10px">Sin señal también funciona: la imagen queda en el teléfono.</div>`}
+           <button data-a="galeria" class="btn ghost" style="margin-top:10px">Cambiar el respaldo</button>`
+        : `<button data-a="galeria" class="btn" style="padding:20px">Subir boleta o documento de respaldo</button>
+           <div class="hint" style="margin-top:10px">Cámara o galería del teléfono. Sin señal también funciona: la imagen queda guardada.</div>`}
     </div>
     <div class="pad" style="padding-bottom:0"><div class="chips">
       ${['Boleta','Factura','Sin doc.'].map(t=>`<button data-a="tipo" data-t="${t}" class="chip ${c.tipo===t?(t==='Sin doc.'?'no':'on'):''}">${t}</button>`).join('')}
@@ -396,7 +393,7 @@ function vPerfil(){
       <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
       <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
-      <div class="hint mono">STAGECORE Rendiciones · v9</div>
+      <div class="hint mono">STAGECORE Rendiciones · v10</div>
     </div></div>`;
 }
 
@@ -493,8 +490,7 @@ function vSheet(){
       </div>
       ${g.foto?`<img src="${g.foto}" alt="" style="width:100%;max-height:220px;object-fit:contain;margin-top:12px;border-radius:12px;background:#16181c">`:''}
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-        <button data-a="fotoG" data-id="${g.id}" class="btn ${g.foto?'ghost':''}">${g.foto?'Tomar otra foto':'Tomar la foto ahora'}</button>
-        <button data-a="galeriaG" data-id="${g.id}" class="btn ghost">Elegir imagen del teléfono</button>
+        <button data-a="galeriaG" data-id="${g.id}" class="btn ${g.foto?'ghost':''}">${g.foto?'Cambiar el respaldo':'Subir boleta o documento de respaldo'}</button>
         <button data-a="borrar" data-id="${g.id}" class="btn warn">Eliminar boleta</button>
         <button data-a="cerrar" class="btn ghost">Cerrar</button></div>`;
   } else if(s.t==='usuario'){
