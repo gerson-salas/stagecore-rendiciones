@@ -347,12 +347,12 @@ function fmtRut(v){ if(v.length<2) return v; const b=v.slice(0,-1), d=v.slice(-1
 function vAgenda(){
   const evs = [...D.eventos].sort((a,b)=>a.fecha<b.fecha?-1:1);
   return `<div class="scroll">
-    <div class="pad"><div class="h1">Agenda</div><div class="sub">${evs.length} eventos · toca uno para dejarlo como rendición activa</div></div>
+    <div class="pad"><div class="h1">Agenda</div><div class="sub">${evs.length} eventos · toca uno para activarlo o eliminarlo</div></div>
     <div class="list" style="padding-top:0">${evs.map(e=>{
       const gs=(D.gastos||[]).filter(g=>g.evento===e.id);
       const t=gs.reduce((a,g)=>a+g.total,0);
       const on = e.id===D.eventoActivo;
-      return `<button data-a="evento" data-id="${e.id}" class="card row" style="width:100%;border-color:${on?'#8f7bff':'#22252a'}">
+      return `<button data-a="sheet" data-s="evdet" data-id="${e.id}" class="card row" style="width:100%;border-color:${on?'#8f7bff':'#22252a'}">
         <div style="width:52px;flex:none;text-align:center">
           <div class="mono" style="font-size:10px;color:#8f7bff">${mes(e.fecha)}</div>
           <div style="font-size:24px;font-weight:700;margin-top:4px">${e.fecha.slice(8,10)}</div></div>
@@ -496,6 +496,23 @@ function vSheet(){
         <button data-a="cerrar" class="btn ghost">Cerrar</button>
       </div>
       ${yoMismo? '<div class="hint" style="margin-top:12px">Es tu propia cuenta: no puedes eliminarla ni quitarte el permiso de aprobar.</div>' : (jefesActivos<=1 && x.rol==='jefe' ? '<div class="hint" style="margin-top:12px">Es el único aprobador activo. Asigna otro antes de cambiarlo.</div>' : '')}`;
+  } else if(s.t==='evdet'){
+    const e = D.eventos.find(z=>z.id===s.id) || {};
+    const gs = (D.gastos||[]).filter(g=>g.evento===e.id);
+    const enRend = (D.rendiciones||[]).some(r=>r.evento===e.id);
+    inner = `<div class="h2">${esc(e.nombre)}</div>
+      <div class="hint" style="margin-top:7px">${esc(e.fecha)} · ${esc(e.lugar||'')}</div>
+      <div class="rows" style="margin:14px 0 0">
+        <div><span>BOLETAS</span><span>${gs.length}</span></div>
+        <div><span>TOTAL</span><b>${money(gs.reduce((a,g)=>a+g.total,0))}</b></div>
+        <div><span>RENDICIONES</span><span>${enRend?'Sí, ya enviada':'Ninguna aún'}</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+        ${e.id===D.eventoActivo? '<div class="btn off">Ya es la rendición activa</div>' : `<button data-a="evento" data-id="${e.id}" class="btn">Usar como rendición activa</button>`}
+        <button data-a="evdel" data-id="${e.id}" class="btn warn">Eliminar evento</button>
+        <button data-a="cerrar" class="btn ghost">Cerrar</button>
+      </div>
+      ${gs.length? '<div class="hint" style="margin-top:12px">Tiene boletas cargadas: al eliminarlo se borran también esas boletas de este teléfono.</div>':''}`;
   } else if(s.t==='nuevoev'){
     inner = `<div class="h2">Agendar evento</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
@@ -624,6 +641,16 @@ document.addEventListener('click', async (e) => {
       if(!confirm('¿Eliminar la cuenta de '+x.nombre+'?'+(n?' Sus '+n+' boletas en este teléfono se mantienen.':''))) return;
       D.usuarios=D.usuarios.filter(z=>z.correo!==c); await save(); U.sheet=null;
       return toast('Cuenta eliminada.');
+    }
+    case 'evdel': {
+      const id=b.dataset.id, e=D.eventos.find(z=>z.id===id);
+      const gs=(D.gastos||[]).filter(g=>g.evento===id);
+      if(D.eventos.length<=1) return toast('Debe quedar al menos un evento en la agenda.');
+      if(!confirm('¿Eliminar «'+e.nombre+'»?'+(gs.length? ' Se borran también sus '+gs.length+' boleta(s).':''))) return;
+      D.eventos=D.eventos.filter(z=>z.id!==id);
+      D.gastos=(D.gastos||[]).filter(g=>g.evento!==id);
+      if(D.eventoActivo===id) D.eventoActivo=D.eventos[0].id;
+      await save(); U.sheet=null; return toast('Evento eliminado.');
     }
     case 'evento': D.eventoActivo=b.dataset.id; await save(); U.sheet=null; U.tab='inicio'; return toast('Rendición activa: '+evActivo().nombre);
     case 'evsave': {
