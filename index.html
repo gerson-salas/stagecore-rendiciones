@@ -83,6 +83,7 @@ canvas.sig{width:100%;height:110px;border-radius:10px;background:#0e0f11;border:
 <body>
 <div id="app"><div class="center"><div class="hint">Cargando…</div></div></div>
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
+<input type="file" id="gal" accept="image/*" hidden>
 <input type="file" id="imp" accept=".json,application/json" hidden>
 
 <script>
@@ -316,9 +317,12 @@ function vCaptura(){
     <div class="pad" style="padding-bottom:0">
       ${c.foto
         ? `<img src="${c.foto}" alt="" style="width:100%;max-height:210px;object-fit:cover;border-radius:14px;border:1px solid #22252a">
-           <button data-a="foto" class="btn ghost" style="margin-top:10px">Volver a tomar la foto</button>`
-        : `<button data-a="foto" class="btn" style="padding:22px">Tomar foto de la boleta</button>
-           <div class="hint" style="margin-top:10px">Sin señal también funciona: la foto queda en el teléfono.</div>`}
+           <div class="row" style="gap:10px;margin-top:10px">
+             <button data-a="foto" class="btn ghost">Tomar otra</button>
+             <button data-a="galeria" class="btn ghost">Elegir de la galería</button></div>`
+        : `<button data-a="foto" class="btn" style="padding:20px">Tomar foto de la boleta</button>
+           <button data-a="galeria" class="btn ghost" style="margin-top:10px">Elegir una imagen del teléfono</button>
+           <div class="hint" style="margin-top:10px">Sin señal también funciona: la imagen queda en el teléfono.</div>`}
     </div>
     <div class="pad" style="padding-bottom:0"><div class="chips">
       ${['Boleta','Factura','Sin doc.'].map(t=>`<button data-a="tipo" data-t="${t}" class="chip ${c.tipo===t?(t==='Sin doc.'?'no':'on'):''}">${t}</button>`).join('')}
@@ -392,7 +396,7 @@ function vPerfil(){
       <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
       <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
-      <div class="hint mono">STAGECORE Rendiciones · v8</div>
+      <div class="hint mono">STAGECORE Rendiciones · v9</div>
     </div></div>`;
 }
 
@@ -489,7 +493,8 @@ function vSheet(){
       </div>
       ${g.foto?`<img src="${g.foto}" alt="" style="width:100%;max-height:220px;object-fit:contain;margin-top:12px;border-radius:12px;background:#16181c">`:''}
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-        <button data-a="fotoG" data-id="${g.id}" class="btn ${g.foto?'ghost':''}">${g.foto?'Cambiar la foto':'Adjuntar la foto ahora'}</button>
+        <button data-a="fotoG" data-id="${g.id}" class="btn ${g.foto?'ghost':''}">${g.foto?'Tomar otra foto':'Tomar la foto ahora'}</button>
+        <button data-a="galeriaG" data-id="${g.id}" class="btn ghost">Elegir imagen del teléfono</button>
         <button data-a="borrar" data-id="${g.id}" class="btn warn">Eliminar boleta</button>
         <button data-a="cerrar" class="btn ghost">Cerrar</button></div>`;
   } else if(s.t==='usuario'){
@@ -628,6 +633,8 @@ document.addEventListener('click', async (e) => {
     }
     case 'foto': U.fotoPara=null; document.getElementById('cam').click(); return;
     case 'fotoG': U.fotoPara=b.dataset.id; document.getElementById('cam').click(); return;
+    case 'galeria': U.fotoPara=null; document.getElementById('gal').click(); return;
+    case 'galeriaG': U.fotoPara=b.dataset.id; document.getElementById('gal').click(); return;
     case 'capsave': {
       const c=U.cap, sinDoc=c.tipo==='Sin doc.';
       if(c.total<=0) return toast('Ingresa el total del documento.');
@@ -779,7 +786,7 @@ function csv(filas,nombre){
 }
 
 /* cámara */
-document.getElementById('cam').addEventListener('change', async (e) => {
+async function recibirImagen(e){
   const f=e.target.files && e.target.files[0]; e.target.value='';
   if(!f) return;
   const foto = await comprimir(f);
@@ -792,7 +799,9 @@ document.getElementById('cam').addEventListener('change', async (e) => {
   if(!U.cap) return;
   U.cap.foto = foto;
   render();
-});
+}
+document.getElementById('cam').addEventListener('change', recibirImagen);
+document.getElementById('gal').addEventListener('change', recibirImagen);
 function comprimir(file){
   return new Promise((res)=>{
     const img=new Image(), fr=new FileReader();
