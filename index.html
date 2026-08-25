@@ -93,14 +93,8 @@ async function kvSet(k,v){const d=await db();return new Promise((res,rej)=>{cons
 
 /* ---------- datos iniciales ---------- */
 const USUARIOS = [
- {nombre:'Mariana Ruiz',cargo:'Técnica de audio · Cuadrilla A',correo:'mariana@stagecore.cl',rol:'campo',pin:'1234',activo:true},
- {nombre:'Iván Peña',cargo:'Técnico de luces · Cuadrilla A',correo:'ivan@stagecore.cl',rol:'campo',pin:'1234',activo:true},
- {nombre:'Sofía Lira',cargo:'Técnica de video · Cuadrilla B',correo:'sofia@stagecore.cl',rol:'campo',pin:'1234',activo:true},
- {nombre:'Camilo Vera',cargo:'Bodega y logística',correo:'camilo@stagecore.cl',rol:'campo',pin:'1234',activo:true},
- {nombre:'Alexis Salas',cargo:'Jefe de producción',correo:'alexis@stagecore.cl',rol:'jefe',pin:'1234',activo:true},
- {nombre:'Rodrigo Salas',cargo:'Jefe de operaciones',correo:'rodrigo@stagecore.cl',rol:'jefe',pin:'1234',activo:true},
- {nombre:'Gerson Salas',cargo:'Gerencia',correo:'gerson@stagecore.cl',rol:'jefe',pin:'1234',activo:true},
- {nombre:'Paula Núñez',cargo:'Contabilidad externa',correo:'paula@contable.cl',rol:'jefe',pin:'',activo:false}
+ {nombre:'Gerson Salas',cargo:'Administrador',correo:'gerson@stagecore.cl',rol:'jefe',pin:'1234',activo:true,admin:true},
+ {nombre:'Alexis Salas',cargo:'Administrador',correo:'alexis@stagecore.cl',rol:'jefe',pin:'1234',activo:true,admin:true}
 ];
 const EVENTOS = [
  {id:'e1',nombre:'Festival Luz Norte',fecha:'2026-08-29',lugar:'Parque Norte, La Serena'},
@@ -112,8 +106,9 @@ const CATS = ['Transporte','Insumos','Alojamiento','Alimentación','Bodega','Arr
 const CODIGO_INVITACION = 'SC-2026';
 
 let D = null;                       // datos persistidos
-let U = {view:'login',paso:'usuario',sel:0,pin:'',err:'',tab:'inicio',cap:null,foco:'monto',rend:null,sheet:null,toast:'',firmado:false};
+let U = {view:'login',paso:'inicio',via:'interna',sel:0,pin:'',err:'',tab:'inicio',cap:null,foco:'monto',rend:null,sheet:null,toast:'',firmado:false};
 
+const esInterna = (u) => /@stagecore\.cl$/i.test(u.correo||'') && !u.externo;
 const uid = () => Math.random().toString(36).slice(2,9);
 const money = (n) => '$' + (Number(n)||0).toLocaleString('es-CL');
 const hoy = () => new Date().toISOString().slice(0,10);
@@ -128,11 +123,17 @@ function toast(t){ U.toast=t; render(); clearTimeout(window.__t); window.__t=set
 /* ---------- arranque ---------- */
 (async function boot(){
   D = await kvGet('data');
-  if(!D){ D = {usuarios:USUARIOS.map(u=>({...u})),eventos:EVENTOS.map(e=>({...e})),gastos:[],rendiciones:[],eventoActivo:'e1',sesion:null}; await save(); }
+  if(!D){ D = {v:2,usuarios:USUARIOS.map(u=>({...u})),eventos:EVENTOS.map(e=>({...e})),gastos:[],rendiciones:[],eventoActivo:'e1',sesion:null}; await save(); }
   D.usuarios = D.usuarios || USUARIOS.map(u=>({...u}));
   D.eventos = D.eventos || EVENTOS.map(e=>({...e}));
   D.gastos = D.gastos || []; D.rendiciones = D.rendiciones || [];
-  U.view = D.sesion ? 'app' : 'login';
+  if(!D.v || D.v < 2){                      // migración: solo administración interna + cuentas invitadas
+    const invitadas = D.usuarios.filter(u=>!/@stagecore\.cl$/i.test(u.correo||''));
+    D.usuarios = USUARIOS.map(u=>({...u})).concat(invitadas);
+    D.v = 2; await save();
+  }
+  if(D.sesion && !D.usuarios.some(u=>u.correo===D.sesion)){ D.sesion=null; await save(); }
+  U.view = D.sesion ? 'app' : 'login'; U.paso = 'inicio';
   if(D.sesion && yo() && yo().rol==='jefe') U.tab='bandeja';
   render();
   if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
@@ -149,20 +150,38 @@ function render(){
 
 /* ---------- login ---------- */
 function vLogin(){
+  const internas = D.usuarios.filter(esInterna), externas = D.usuarios.filter(u=>!esInterna(u));
   const act = D.usuarios.filter(u=>u.activo).length;
   let body='';
-  if(U.paso==='usuario'){
+  if(U.paso==='inicio'){
+    body = `<div class="scroll pad">
+      <button data-a="via" data-t="interna" class="card" style="width:100%;display:block;padding:18px">
+        <div style="font-size:16px;font-weight:700">Administración STAGECORE</div>
+        <div class="hint" style="margin-top:7px">Solo los administradores de la empresa</div>
+        <div class="mono" style="font-size:10px;color:#8f7bff;margin-top:10px">${internas.length} CUENTAS</div>
+      </button>
+      <button data-a="via" data-t="externa" class="card" style="width:100%;display:block;padding:18px;margin-top:12px">
+        <div style="font-size:16px;font-weight:700">Personal y externos</div>
+        <div class="hint" style="margin-top:7px">Técnicos, freelance y proveedores · cualquier correo</div>
+        <div class="mono" style="font-size:10px;color:#d8bd7a;margin-top:10px">ENTRADA CON CÓDIGO DE INVITACIÓN</div>
+      </button>
+      <div class="hint" style="margin-top:16px">Las dos vías entran con un PIN de 4 dígitos. Quien carga boletas ve solo las suyas; los administradores revisan, firman y exportan al ERP.</div>
+    </div>`;
+  } else if(U.paso==='usuario'){
+    const lista = D.usuarios.map((u,i)=>({u,i})).filter(x=> U.via==='interna' ? esInterna(x.u) : !esInterna(x.u));
     body = '<div class="scroll" style="padding:18px 22px 22px"><div style="display:flex;flex-direction:column;gap:9px">'
-      + D.usuarios.map((u,i)=>`<button data-a="pick" data-i="${i}" class="card row" style="width:100%">
+      + (lista.length? '' : '<div class="card hint">Todavía no hay cuentas registradas. Regístrate con el código que te dieron.</div>')
+      + lista.map(({u,i})=>`<button data-a="pick" data-i="${i}" class="card row" style="width:100%">
           <div class="avatar">${esc(ini(u.nombre))}</div>
           <div style="flex:1;min-width:0;opacity:${u.activo?1:.62}">
             <div class="name">${esc(u.nombre)}</div>
             <div class="st mono ${u.activo?'dimc':'warnc'}">${u.activo?esc(u.correo):'INVITADA · fija tu PIN'}</div>
           </div><div class="dimc">→</div></button>`).join('')
-      + `<button data-a="ext" style="width:100%;padding:14px 12px;border-radius:14px;border:1px dashed #2f3238;text-align:center">
-           <div style="font-size:13px;font-weight:500;color:#c9ccd2">No estoy en la lista</div>
-           <div class="hint" style="margin-top:6px">Freelance, proveedor o contador externo · entra con código</div>
-         </button></div></div>`;
+      + (U.via==='interna' ? '' : `<button data-a="ext" style="width:100%;padding:14px 12px;border-radius:14px;border:1px dashed #2f3238;text-align:center">
+           <div style="font-size:13px;font-weight:500;color:#c9ccd2">Registrar mi cuenta</div>
+           <div class="hint" style="margin-top:6px">Con el código que te entregó STAGECORE</div>
+         </button>`)
+      + '<button data-a="back" class="btn ghost" style="margin-top:6px">Volver</button></div></div>';
   } else if(U.paso==='externo'){
     body = `<div class="scroll pad">
       <div style="display:flex;flex-direction:column;gap:10px">
@@ -189,10 +208,14 @@ function vLogin(){
         </div>
       </div></div>`;
   }
-  const t = U.paso==='usuario' ? 'Elige tu cuenta' : (U.paso==='externo' ? 'Acceso externo' : (U.nuevo?U.nuevo.nombre:D.usuarios[U.sel].nombre));
-  const s = U.paso==='usuario' ? act+' cuentas activas · '+(D.usuarios.length-act)+' por activar'
-    : (U.paso==='externo' ? 'Para freelance y proveedores sin correo @stagecore.cl'
-    : (U.paso==='nuevo' ? 'Crea tu PIN' : 'Ingresa tu PIN'));
+  const t = U.paso==='inicio' ? 'Ingresar'
+    : U.paso==='usuario' ? (U.via==='interna' ? 'Administradores' : 'Cuentas registradas')
+    : U.paso==='externo' ? 'Registro con código'
+    : (U.nuevo?U.nuevo.nombre:D.usuarios[U.sel].nombre);
+  const s = U.paso==='inicio' ? '¿Con qué cuenta entras?'
+    : U.paso==='usuario' ? (U.via==='interna' ? internas.filter(x=>x.activo).length+' de '+internas.length+' activas' : externas.filter(x=>x.activo).length+' de '+externas.length+' activas')
+    : U.paso==='externo' ? 'Técnicos, freelance y proveedores · necesitas el código de invitación'
+    : (U.paso==='nuevo' ? 'Crea tu PIN' : 'Ingresa tu PIN');
   return `<div class="top"><span class="mono">STAGECORE</span><span class="mono">${navigator.onLine?'CONECTADO':'SIN SEÑAL'}</span></div>
     <div style="padding:26px 22px 0"><img src="logo.png" alt="STAGECORE Visual Rental" style="width:150px;height:auto;display:block">
       <div class="h1" style="margin-top:18px">${esc(t)}</div><div class="sub">${esc(s)}</div></div>${body}`;
@@ -416,15 +439,15 @@ function vEquipo(){
   const act = D.usuarios.filter(u=>u.activo).length;
   return `<div class="scroll">
     <div class="pad"><div class="h1">Usuarios</div><div class="sub">${D.usuarios.length} cuentas · ${act} activas</div></div>
-    <div class="list" style="padding-top:0">${D.usuarios.map(u=>`<div class="card row">
+    <div class="list" style="padding-top:0">${D.usuarios.map(u=>`<button data-a="sheet" data-s="usuario" data-id="${esc(u.correo)}" class="card row" style="width:100%">
       <div class="avatar">${esc(ini(u.nombre))}</div>
-      <div style="flex:1;min-width:0"><div class="name">${esc(u.nombre)}</div><div class="st mono dimc">${esc(u.cargo)}</div></div>
+      <div style="flex:1;min-width:0"><div class="name">${esc(u.nombre)}</div><div class="st mono dimc">${esc(u.correo)}</div></div>
       <div style="text-align:right;flex:none">
-        <span class="tag" style="background:${u.externo?'#2a2418':(u.rol==='jefe'?'#241f3d':'#1b2420')};color:${u.externo?'#d8bd7a':(u.rol==='jefe'?'#b9aaff':'#79c79a')}">${u.externo?'EXTERNO':(u.rol==='jefe'?'APRUEBA':'CAMPO')}</span>
-        <div class="st mono ${u.activo?'ok':'warnc'}">${u.activo?'ACTIVA':'INVITADA'}</div></div></div>`).join('')}</div>
+        <span class="tag" style="background:${esInterna(u)?(u.rol==='jefe'?'#241f3d':'#1b2420'):'#2a2418'};color:${esInterna(u)?(u.rol==='jefe'?'#b9aaff':'#79c79a'):'#d8bd7a'}">${esInterna(u)?(u.rol==='jefe'?'APRUEBA':'CAMPO'):'EXTERNO'}</span>
+        <div class="st mono ${u.activo?'ok':'warnc'}">${u.activo?'ACTIVA':'POR ACTIVAR'}</div></div></button>`).join('')}</div>
     <div class="pad" style="display:flex;flex-direction:column;gap:10px">
       <button data-a="sheet" data-s="invitar" class="btn">Invitar a alguien</button>
-      <div class="hint">Los externos entran con el código <b class="mono">${CODIGO_INVITACION}</b> y crean su propio PIN. No necesitan correo @stagecore.cl.</div>
+      <div class="hint">Toca una cuenta para reiniciar su PIN, suspenderla o eliminarla. Aprobar y exportar al ERP es solo de las cuentas de administración.</div>
     </div></div>`;
 }
 
@@ -453,6 +476,26 @@ function vSheet(){
       <div class="row" style="gap:10px;margin-top:14px">
         <button data-a="borrar" data-id="${g.id}" class="btn warn">Eliminar</button>
         <button data-a="cerrar" class="btn ghost">Cerrar</button></div>`;
+  } else if(s.t==='usuario'){
+    const x = D.usuarios.find(z=>z.correo===s.id) || {};
+    const yoMismo = x.correo===D.sesion;
+    const jefesActivos = D.usuarios.filter(z=>z.rol==='jefe'&&z.activo).length;
+    const gastosSuyos = (D.gastos||[]).filter(g=>g.usuario===x.correo).length;
+    inner = `<div class="h2">${esc(x.nombre)}</div>
+      <div class="hint" style="margin-top:7px">${esc(x.correo)} · ${esc(x.cargo||'')}</div>
+      <div class="rows" style="margin:14px 0 0">
+        <div><span>ROL</span><span>${x.rol==='jefe'?'Aprobador':'Campo'}</span></div>
+        <div><span>ESTADO</span><span>${x.activo?'Activa':'Por activar'}</span></div>
+        <div><span>BOLETAS EN ESTE TELÉFONO</span><span>${gastosSuyos}</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+        <button data-a="urol" data-id="${esc(x.correo)}" class="btn ghost" style="${x.admin?'':'display:none'}">${x.rol==='jefe'?'Pasar a solo carga':'Dar permiso de aprobar'}</button>
+        <button data-a="upin" data-id="${esc(x.correo)}" class="btn ghost">Reiniciar PIN (vuelve a crearlo)</button>
+        <button data-a="utog" data-id="${esc(x.correo)}" class="btn ghost">${x.activo?'Suspender acceso':'Reactivar acceso'}</button>
+        <button data-a="udel" data-id="${esc(x.correo)}" class="btn warn">Eliminar cuenta</button>
+        <button data-a="cerrar" class="btn ghost">Cerrar</button>
+      </div>
+      ${yoMismo? '<div class="hint" style="margin-top:12px">Es tu propia cuenta: no puedes eliminarla ni quitarte el permiso de aprobar.</div>' : (jefesActivos<=1 && x.rol==='jefe' ? '<div class="hint" style="margin-top:12px">Es el único aprobador activo. Asigna otro antes de cambiarlo.</div>' : '')}`;
   } else if(s.t==='nuevoev'){
     inner = `<div class="h2">Agendar evento</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
@@ -463,12 +506,10 @@ function vSheet(){
       <div class="row" style="gap:10px;margin-top:16px"><button data-a="cerrar" class="btn ghost">Cancelar</button>
       <button data-a="evsave" class="btn">Agendar</button></div>`;
   } else if(s.t==='invitar'){
-    inner = `<div class="h2">Invitar</div><div class="hint" style="margin-top:8px">Se agrega a la lista de cuentas. La persona entra y crea su PIN.</div>
+    inner = `<div class="h2">Invitar</div><div class="hint" style="margin-top:8px">Se agrega a la lista. La persona entra con el código <b class="mono">${CODIGO_INVITACION}</b> y crea su PIN. Solo carga boletas: no aprueba ni exporta.</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
         <div class="field"><div class="lbl">Nombre</div><input id="in" placeholder="Nombre y apellido"></div>
         <div class="field"><div class="lbl">Correo</div><input id="ic" type="email" placeholder="cualquier@correo.com"></div>
-        <div class="field"><div class="lbl">Rol</div><select id="ir" style="width:100%;margin-top:8px;background:none;border:none;color:#f2f2ef;outline:none">
-          <option value="campo">Campo — captura boletas</option><option value="jefe">Aprobador — revisa y firma</option></select></div>
       </div>
       <div class="row" style="gap:10px;margin-top:16px"><button data-a="cerrar" class="btn ghost">Cancelar</button>
       <button data-a="invsave" class="btn">Invitar</button></div>`;
@@ -492,6 +533,7 @@ document.addEventListener('click', async (e) => {
       const i = +b.dataset.i, us = D.usuarios[i];
       U.sel=i; U.nuevo=null; U.pin=''; U.err=''; U.paso = us.activo? 'pin':'nuevo'; return render();
     }
+    case 'via': U.via=b.dataset.t; U.paso='usuario'; U.err=''; return render();
     case 'ext': U.paso='externo'; U.err=''; return render();
     case 'extok': {
       const n=(document.getElementById('xn').value||'').trim();
@@ -504,7 +546,7 @@ document.addEventListener('click', async (e) => {
       U.nuevo={nombre:n,cargo:'Externo · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true};
       U.paso='nuevo'; U.pin=''; U.err=''; return render();
     }
-    case 'back': U.paso = U.paso==='externo' ? 'usuario' : 'usuario'; U.pin=''; U.err=''; U.nuevo=null; return render();
+    case 'back': U.paso = (U.paso==='usuario' || U.paso==='externo') ? (U.paso==='externo' ? 'usuario' : 'inicio') : (U.nuevo ? 'externo' : 'usuario'); U.pin=''; U.err=''; if(U.paso!=='externo') U.nuevo=null; return render();
     case 'k': {
       const k=b.dataset.k;
       U.err='';
@@ -524,7 +566,7 @@ document.addEventListener('click', async (e) => {
       D.sesion=us.correo; await save(); U.view='app'; U.pin=''; U.tab = us.rol==='jefe'?'bandeja':'inicio';
       return toast('Hola, '+us.nombre.split(' ')[0]+'.');
     }
-    case 'salir': D.sesion=null; await save(); U={...U,view:'login',paso:'usuario',pin:'',err:'',cap:null,rend:null,sheet:null}; return render();
+    case 'salir': D.sesion=null; await save(); U={...U,view:'login',paso:'inicio',pin:'',err:'',cap:null,rend:null,sheet:null}; return render();
     case 'tab': U.tab=b.dataset.t; U.sheet=null; return render();
     case 'sheet': U.sheet={t:b.dataset.s,id:b.dataset.id}; return render();
     case 'cerrar': U.sheet=null; return render();
@@ -553,6 +595,36 @@ document.addEventListener('click', async (e) => {
     }
     case 'borrar': D.gastos=D.gastos.filter(g=>g.id!==b.dataset.id); await save(); U.sheet=null; return toast('Boleta eliminada.');
 
+    case 'urol': {
+      const x=D.usuarios.find(z=>z.correo===b.dataset.id);
+      if(!x.admin) return toast('Solo las cuentas de administración STAGECORE aprueban rendiciones.');
+      if(x.correo===D.sesion) return toast('No puedes cambiar tu propio rol.');
+      if(x.rol==='jefe' && D.usuarios.filter(z=>z.rol==='jefe'&&z.activo).length<=1) return toast('Debe quedar al menos un aprobador activo.');
+      x.rol = x.rol==='jefe'?'campo':'jefe';
+      x.cargo = esInterna(x) ? (x.rol==='jefe'?'Aprobador':'Campo') : x.cargo;
+      await save(); U.sheet=null; return toast(x.nombre.split(' ')[0]+' ahora '+(x.rol==='jefe'?'puede aprobar rendiciones.':'solo captura boletas.'));
+    }
+    case 'upin': {
+      const x=D.usuarios.find(z=>z.correo===b.dataset.id);
+      x.pin=''; x.activo=false; await save(); U.sheet=null;
+      return toast('PIN reiniciado. '+x.nombre.split(' ')[0]+' crea uno nuevo al entrar.');
+    }
+    case 'utog': {
+      const x=D.usuarios.find(z=>z.correo===b.dataset.id);
+      if(x.correo===D.sesion) return toast('No puedes suspender tu propia cuenta.');
+      if(x.activo && x.rol==='jefe' && D.usuarios.filter(z=>z.rol==='jefe'&&z.activo).length<=1) return toast('Debe quedar al menos un aprobador activo.');
+      x.activo=!x.activo; if(!x.activo) x.pin=''; await save(); U.sheet=null;
+      return toast(x.activo? 'Acceso reactivado.' : 'Acceso suspendido.');
+    }
+    case 'udel': {
+      const c=b.dataset.id, x=D.usuarios.find(z=>z.correo===c);
+      if(c===D.sesion) return toast('No puedes eliminar tu propia cuenta.');
+      if(x.rol==='jefe' && D.usuarios.filter(z=>z.rol==='jefe'&&z.activo).length<=1) return toast('Debe quedar al menos un aprobador activo.');
+      const n=(D.gastos||[]).filter(g=>g.usuario===c).length;
+      if(!confirm('¿Eliminar la cuenta de '+x.nombre+'?'+(n?' Sus '+n+' boletas en este teléfono se mantienen.':''))) return;
+      D.usuarios=D.usuarios.filter(z=>z.correo!==c); await save(); U.sheet=null;
+      return toast('Cuenta eliminada.');
+    }
     case 'evento': D.eventoActivo=b.dataset.id; await save(); U.sheet=null; U.tab='inicio'; return toast('Rendición activa: '+evActivo().nombre);
     case 'evsave': {
       const n=(document.getElementById('en').value||'').trim();
@@ -564,10 +636,9 @@ document.addEventListener('click', async (e) => {
     case 'invsave': {
       const n=(document.getElementById('in').value||'').trim();
       const c=(document.getElementById('ic').value||'').trim();
-      const r=document.getElementById('ir').value;
       if(n.split(/\s+/).length<2 || !/.+@.+\..+/.test(c)) return toast('Falta nombre completo o correo.');
-      const ext = !/@stagecore\.cl$/i.test(c);
-      D.usuarios.push({nombre:n,cargo:ext?'Externo · acceso por invitación':(r==='jefe'?'Aprobador':'Campo'),correo:c,rol:r,pin:'',activo:false,externo:ext});
+      if(D.usuarios.some(x=>x.correo.toLowerCase()===c.toLowerCase())) return toast('Ya existe una cuenta con ese correo.');
+      D.usuarios.push({nombre:n,cargo:'Carga boletas · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true});
       await save(); U.sheet=null; return toast('Invitada. Entra con el código '+CODIGO_INVITACION+' y crea su PIN.');
     }
     case 'pinsave': {

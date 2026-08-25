@@ -1,4 +1,4 @@
-const CACHE = 'stagecore-rendiciones-v1';
+const CACHE = 'stagecore-rendiciones-v5';
 const ASSETS = [
   './',
   './index.html',
