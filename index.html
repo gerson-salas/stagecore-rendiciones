@@ -105,7 +105,8 @@ const EVENTOS = [
  {id:'e3',nombre:'Lanzamiento Molina',fecha:'2026-09-02',lugar:'Teatro Sur, Valparaíso'},
  {id:'e4',nombre:'Gira Arena',fecha:'2026-09-07',lugar:'Arena Monticello'}
 ];
-const CATS = ['Transporte','Insumos','Alojamiento','Alimentación','Bodega','Arriendo'];
+const CATS = ['Transporte','Insumos','Alojamiento','Alimentación','Bodega','Arriendo','Honorarios'];
+const RET_HON = 0.1525; // retención boleta de honorarios — ajustable por año
 const CODIGO_INVITACION = 'SC-2026';
 
 let D = null;                       // datos persistidos
@@ -307,6 +308,7 @@ function gastoRow(g){
 function vCaptura(){
   const c = U.cap, sinDoc = c.tipo==='Sin doc.';
   const neto = Math.round(c.total/1.19), iva = c.total-neto;
+  const ret = Math.round(c.total*RET_HON), liquido = c.total-ret;
   const rutOk = c.rut.length>=8, folioOk = c.folio.length>=1;
   const ok = c.total>0 && (sinDoc || (rutOk&&folioOk));
   const foco = sinDoc && U.foco!=='monto' ? 'monto' : U.foco;
@@ -322,26 +324,26 @@ function vCaptura(){
            <div class="hint" style="margin-top:10px">Cámara o galería del teléfono. Sin señal también funciona: la imagen queda guardada.</div>`}
     </div>
     <div class="pad" style="padding-bottom:0"><div class="chips">
-      ${['Boleta','Factura','Sin doc.'].map(t=>`<button data-a="tipo" data-t="${t}" class="chip ${c.tipo===t?(t==='Sin doc.'?'no':'on'):''}">${t}</button>`).join('')}
+      ${['Boleta','Factura','Honorarios','Sin doc.'].map(t=>`<button data-a="tipo" data-t="${t}" class="chip ${c.tipo===t?(t==='Sin doc.'?'no':'on'):''}">${t==='Honorarios'?'Bol. honorarios':t}</button>`).join('')}
     </div></div>
     <div style="padding:12px 22px 0">
       <button data-a="foco" data-f="monto" class="field ${foco==='monto'?'on':''}" style="width:100%;display:block">
-        <div class="lbl">Total del documento</div>
+        <div class="lbl">${c.tipo==='Honorarios'?'Monto bruto de la boleta':'Total del documento'}</div>
         <div style="font-size:34px;font-weight:700;margin-top:8px">${money(c.total)}</div>
-        <div class="mono" style="font-size:11px;margin-top:8px;color:${sinDoc?'#e08bc0':'#8a8f97'}">${sinDoc?'Sin respaldo tributario · no da crédito fiscal':(c.tipo==='Factura'?'Neto '+money(neto)+' · IVA 19% '+money(iva):'IVA incluido · boleta sin crédito fiscal')}</div>
+        <div class="mono" style="font-size:11px;margin-top:8px;color:${sinDoc?'#e08bc0':'#8a8f97'}">${sinDoc?'Sin respaldo tributario · no da crédito fiscal':(c.tipo==='Factura'?'Neto '+money(neto)+' · IVA 19% '+money(iva):(c.tipo==='Honorarios'?'Bruto · retención '+(RET_HON*100).toFixed(2).replace('.',',')+'% '+money(ret)+' · líquido '+money(liquido):'IVA incluido · boleta sin crédito fiscal'))}</div>
       </button>
     </div>
     <div class="row" style="padding:10px 22px 0;gap:10px">
       <button data-a="foco" data-f="rut" class="field ${foco==='rut'?'on':''} ${sinDoc?'dim':''}" style="flex:1.35">
-        <div class="lbl">RUT proveedor</div><div class="v" style="color:${sinDoc?'#5c6068':(rutOk?'#f2f2ef':'#8a8f97')}">${sinDoc?'No aplica':(c.rut?fmtRut(c.rut):'—')}</div></button>
+        <div class="lbl">${c.tipo==='Honorarios'?'RUT del prestador':'RUT proveedor'}</div><div class="v" style="color:${sinDoc?'#5c6068':(rutOk?'#f2f2ef':'#8a8f97')}">${sinDoc?'No aplica':(c.rut?fmtRut(c.rut):'—')}</div></button>
       <button data-a="foco" data-f="folio" class="field ${foco==='folio'?'on':''} ${sinDoc?'dim':''}" style="flex:1">
         <div class="lbl">Folio</div><div class="v" style="color:${sinDoc?'#5c6068':(folioOk?'#f2f2ef':'#8a8f97')}">${sinDoc?'No aplica':(c.folio||'—')}</div></button>
     </div>
     <div class="pad" style="padding-bottom:0"><div class="chips">
       ${CATS.map(k=>`<button data-a="cat" data-k="${k}" class="chip ${c.categoria===k?'on':''}">${k}</button>`).join('')}
     </div></div>
-    <div style="padding:12px 22px 0"><div class="field"><div class="lbl">Proveedor (opcional)</div>
-      <input value="${esc(c.prov||'')}" oninput="setProv(this.value)" placeholder="Razón social o nombre"></div></div>
+    <div style="padding:12px 22px 0"><div class="field"><div class="lbl">${c.tipo==='Honorarios'?'Prestador del servicio':'Proveedor (opcional)'}</div>
+      <input value="${esc(c.prov||'')}" oninput="setProv(this.value)" placeholder="${c.tipo==='Honorarios'?'Nombre de quien emite la boleta':'Razón social o nombre'}"></div></div>
     <div class="rows"><div><span>EVENTO</span><span>${esc(evActivo().nombre)}</span></div>
       <div><span>FECHA</span><span>${esc(c.fecha)}</span></div></div>
     <div style="margin-top:auto">
@@ -393,7 +395,7 @@ function vPerfil(){
       <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
       <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
-      <div class="hint mono">STAGECORE Rendiciones · v10</div>
+      <div class="hint mono">STAGECORE Rendiciones · v11</div>
     </div></div>`;
 }
 
@@ -485,6 +487,7 @@ function vSheet(){
         <div><span>TOTAL</span><b>${money(g.total)}</b></div>
         <div><span>DOCUMENTO</span><span>${esc(g.tipo)} ${g.folio?'#'+esc(g.folio):''}</span></div>
         <div><span>RUT</span><span>${g.rut?esc(fmtRut(g.rut)):'—'}</span></div>
+        ${g.tipo==='Honorarios'?`<div><span>RETENCIÓN</span><span>${money(Math.round(g.total*RET_HON))} · líquido ${money(g.total-Math.round(g.total*RET_HON))}</span></div>`:''}
         <div><span>CATEGORÍA</span><span>${esc(g.categoria)}</span></div>
         <div><span>FECHA</span><span>${esc(g.fecha)}</span></div>
       </div>
@@ -617,7 +620,10 @@ document.addEventListener('click', async (e) => {
     case 'capEv': D.eventoActivo=b.dataset.id; await save(); U.sheet=null;
       U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',prov:'',foto:null,fecha:hoy()}; U.foco='monto'; return render();
     case 'capx': U.cap=null; return render();
-    case 'tipo': U.cap.tipo=b.dataset.t; if(U.cap.tipo==='Sin doc.'){U.cap.rut='';U.cap.folio='';U.foco='monto';} else U.foco='rut'; return render();
+    case 'tipo': U.cap.tipo=b.dataset.t;
+      if(U.cap.tipo==='Sin doc.'){U.cap.rut='';U.cap.folio='';U.foco='monto';} else U.foco='rut';
+      if(U.cap.tipo==='Honorarios') U.cap.categoria='Honorarios';
+      return render();
     case 'cat': U.cap.categoria=b.dataset.k; return render();
     case 'foco': if(!(U.cap.tipo==='Sin doc.' && b.dataset.f!=='monto')) U.foco=b.dataset.f; return render();
     case 'ck': {
@@ -769,13 +775,14 @@ function bajar(blob,nombre){
 }
 function csv(filas,nombre){
   if(!filas.length) return toast('Nada que exportar.');
-  const cab=['fecha','evento','usuario','tipo_documento','rut_proveedor','folio','proveedor','categoria','total','neto','iva','estado','aprobada_por'];
+  const cab=['fecha','evento','usuario','tipo_documento','rut_proveedor','folio','proveedor','categoria','total','neto','iva','retencion','liquido','estado','aprobada_por'];
   const ev=(id)=>((D.eventos||[]).find(e=>e.id===id)||{}).nombre||id;
   const lin=filas.map(g=>{
     const neto=g.tipo==='Factura'?Math.round(g.total/1.19):g.total;
     const iva=g.tipo==='Factura'?g.total-neto:0;
+    const ret=g.tipo==='Honorarios'?Math.round(g.total*RET_HON):0;
     return [g.fecha,g.nombreEvento||ev(g.evento),g.nombreUsuario||g.usuario,g.tipo,g.rut?fmtRut(g.rut):'',g.folio||'',
-      g.proveedor||'',g.categoria,g.total,neto,iva,g.estado||'',g.aprobadaPor||''].map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(';');
+      g.proveedor||'',g.categoria,g.total,neto,iva,ret,g.total-ret,g.estado||'',g.aprobadaPor||''].map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(';');
   });
   bajar(new Blob(['\uFEFF'+cab.join(';')+'\n'+lin.join('\n')],{type:'text/csv;charset=utf-8'}), nombre+'-'+hoy()+'.csv');
   toast('CSV generado. Se abre en Excel y se importa al ERP.');
