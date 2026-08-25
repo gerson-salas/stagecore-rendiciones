@@ -52,7 +52,9 @@ input,select{font:inherit}
 .nav{flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 26px calc(env(safe-area-inset-bottom) + 20px);border-top:1px solid #1c1e22;background:#101216}
 .nav button{font-size:11px;letter-spacing:.06em;color:#6a6d73}
 .nav button.on{color:#f2f2ef;font-weight:600}
-.fab{width:56px;height:56px;border-radius:18px;background:#8f7bff;color:#0e0f11;display:grid;place-items:center;font-size:24px;box-shadow:0 8px 24px rgba(143,123,255,.35)}
+.fab{width:56px;height:56px;border-radius:18px;background:#8f7bff;display:grid;place-items:center;box-shadow:0 8px 24px rgba(143,123,255,.35)}
+.nav .fab{color:#0e0f11;font-size:30px;font-weight:700;line-height:1;letter-spacing:0}
+.nav .fab span{display:block;margin-top:-3px}
 .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;padding:10px 16px 0}
 .keys button{text-align:center;padding:14px 0;border-radius:12px;background:#16181c;border:1px solid #22252a;font-size:18px;font-weight:600}
 .field{padding:12px 14px;border-radius:14px;background:#16181c;border:1px solid #22252a}
@@ -109,6 +111,9 @@ let D = null;                       // datos persistidos
 let U = {view:'login',paso:'inicio',via:'interna',sel:0,pin:'',err:'',tab:'inicio',cap:null,foco:'monto',rend:null,sheet:null,toast:'',firmado:false};
 
 const esInterna = (u) => /@stagecore\.cl$/i.test(u.correo||'') && !u.externo;
+const codigoActual = () => (D && D.codigo) || CODIGO_INVITACION;
+window.setProv = (v) => { if(U.cap) U.cap.prov = v; };
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); window.__ip = e; });
 const uid = () => Math.random().toString(36).slice(2,9);
 const money = (n) => '$' + (Number(n)||0).toLocaleString('es-CL');
 const hoy = () => new Date().toISOString().slice(0,10);
@@ -242,18 +247,19 @@ function vApp(){
   if(!U.cap && U.rend==null){
     nav = jefe
       ? `<div class="nav"><button data-a="tab" data-t="bandeja" class="${U.tab==='bandeja'?'on':''}">BANDEJA</button>
+         <button data-a="tab" data-t="inicio" class="${U.tab==='inicio'?'on':''}">MIS BOLETAS</button>
+         <button data-a="cap" class="fab" aria-label="Cargar boleta" title="Cargar boleta"><span>+</span></button>
          <button data-a="tab" data-t="agenda" class="${U.tab==='agenda'?'on':''}">AGENDA</button>
-         <button data-a="tab" data-t="equipo" class="${U.tab==='equipo'?'on':''}">EQUIPO</button>
          <button data-a="tab" data-t="perfil" class="${U.tab==='perfil'?'on':''}">PERFIL</button></div>`
       : `<div class="nav"><button data-a="tab" data-t="inicio" class="${U.tab==='inicio'?'on':''}">RENDICIÓN</button>
          <button data-a="tab" data-t="agenda" class="${U.tab==='agenda'?'on':''}">AGENDA</button>
-         <button data-a="cap" class="fab">◉</button>
+         <button data-a="cap" class="fab" aria-label="Cargar boleta" title="Cargar boleta"><span>+</span></button>
          <button data-a="tab" data-t="perfil" class="${U.tab==='perfil'?'on':''}">PERFIL</button></div>`;
   }
   const cola = (D.gastos||[]).filter(g=>g.estado==='cola').length;
   return `<div class="top"><span class="mono">${navigator.onLine?'CONECTADO':'SIN SEÑAL'}</span><span class="mono">${cola?cola+' POR SINCRONIZAR':'TODO GUARDADO'}</span></div>
     <div class="brand"><img src="logo.png" alt="STAGECORE Visual Rental">
-      <div class="meta mono">${esc(u.nombre.split(' ')[0].toUpperCase())}<br>${jefe?'APROBADOR':'CAMPO'}</div></div>
+      <div class="meta mono">${esc(u.nombre.split(' ')[0].toUpperCase())}<br>${u.admin?'ADMIN':(jefe?'APROBADOR':'CARGA BOLETAS')}</div></div>
     ${body}${nav}`;
 }
 
@@ -280,7 +286,7 @@ function vInicio(){
     </div>
     ${faltan? `<div style="margin:0 22px 14px;padding:14px 16px;border-radius:14px;background:#231a1f;border:1px solid #4a2c3c;font-size:12px;line-height:1.45;color:#f0cfe2">${faltan} boleta(s) sin foto o sin documento tributario. Contabilidad no las puede recibir así.</div>`:''}
     <div class="pad" style="padding-bottom:0"><div class="lbl">Boletas de este evento</div></div>
-    <div class="list">${gs.length? gs.map(g=>gastoRow(g)).join('') : '<div class="card hint">Sin boletas todavía. Toca ◉ para capturar la primera.</div>'}</div>
+    <div class="list">${gs.length? gs.map(g=>gastoRow(g)).join('') : '<button data-a="cap" class="card hint" style="width:100%;text-align:center;padding:22px">Sin boletas todavía.<br><b style="color:#8f7bff">Cargar la primera</b></button>'}</div>
     <div class="pad">
       ${enviada
         ? '<div class="btn off">Enviada — esperando aprobación</div>'
@@ -333,6 +339,8 @@ function vCaptura(){
     <div class="pad" style="padding-bottom:0"><div class="chips">
       ${CATS.map(k=>`<button data-a="cat" data-k="${k}" class="chip ${c.categoria===k?'on':''}">${k}</button>`).join('')}
     </div></div>
+    <div style="padding:12px 22px 0"><div class="field"><div class="lbl">Proveedor (opcional)</div>
+      <input value="${esc(c.prov||'')}" oninput="setProv(this.value)" placeholder="Razón social o nombre"></div></div>
     <div class="rows"><div><span>EVENTO</span><span>${esc(evActivo().nombre)}</span></div>
       <div><span>FECHA</span><span>${esc(c.fecha)}</span></div></div>
     <div style="margin-top:auto">
@@ -373,15 +381,18 @@ function vPerfil(){
     <div class="pad"><div class="h1">${esc(u.nombre)}</div><div class="sub">${esc(u.cargo)}</div></div>
     <div class="rows" style="margin-top:0">
       <div><span>CORREO</span><span>${esc(u.correo)}</span></div>
-      <div><span>ROL</span><span>${u.rol==='jefe'?'Aprobador':'Campo'}</span></div>
+      <div><span>ROL</span><span>${u.admin?'Administrador':(u.rol==='jefe'?'Aprobador':'Carga boletas')}</span></div>
       <div><span>BOLETAS CARGADAS</span><span>${mios.length}</span></div>
       <div><span>TOTAL ACUMULADO</span><span>${money(mios.reduce((a,g)=>a+g.total,0))}</span></div>
     </div>
     <div class="pad" style="display:flex;flex-direction:column;gap:10px">
+      ${u.rol==='jefe' ? '<button data-a="tab" data-t="equipo" class="btn ghost">Usuarios y accesos</button>' : ''}
       <button data-a="sheet" data-s="pin" class="btn ghost">Cambiar mi PIN</button>
       <button data-a="csv" class="btn ghost">Exportar mis boletas (CSV)</button>
+      <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
-      <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el aprobador; él lo importa en su propio teléfono.</div>
+      <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
+      <div class="hint mono">STAGECORE Rendiciones · v8</div>
     </div></div>`;
 }
 
@@ -429,9 +440,12 @@ function vRevision(){
           <button data-a="sigclr" class="mono" style="font-size:10px;color:#8f7bff">LIMPIAR</button></div></div>
       <div class="row" style="gap:10px;margin-top:14px">
         <button data-a="devolver" class="btn warn">Devolver</button>
-        <button data-a="aprobar" class="btn ${U.firmado?'':'off'}">Autorizar pago</button></div></div>`
+        <button data-a="aprobar" class="btn ${U.firmado?'':'off'}">Autorizar pago</button></div>
+      <button data-a="fotosR" class="btn ghost" style="margin-top:10px">Descargar comprobantes</button></div>`
     : `<div class="pad" style="padding-top:0">${r.firma?`<img src="${r.firma}" alt="firma" style="width:100%;max-height:120px;object-fit:contain;background:#16181c;border-radius:12px;border:1px solid #22252a">`:''}
-        <div class="hint" style="margin-top:10px">${r.estado==='aprobada'?'Autorizada'+(r.aprobadaPor?' por '+esc(r.aprobadaPor):'')+'. Ya entra en el CSV para el ERP.':'Devuelta al técnico para corregir.'}</div></div>`}
+        <div class="hint" style="margin-top:10px">${r.estado==='aprobada'?'Autorizada'+(r.aprobadaPor?' por '+esc(r.aprobadaPor):'')+'. Ya entra en el CSV para el ERP.':'Devuelta al técnico para corregir.'}</div>
+        <button data-a="fotosR" class="btn ghost" style="margin-top:12px">Descargar comprobantes</button>
+        <button data-a="rendel" class="btn warn" style="margin-top:10px">Quitar de la bandeja</button></div>`}
     </div>`;
 }
 
@@ -447,6 +461,7 @@ function vEquipo(){
         <div class="st mono ${u.activo?'ok':'warnc'}">${u.activo?'ACTIVA':'POR ACTIVAR'}</div></div></button>`).join('')}</div>
     <div class="pad" style="display:flex;flex-direction:column;gap:10px">
       <button data-a="sheet" data-s="invitar" class="btn">Invitar a alguien</button>
+      <button data-a="sheet" data-s="codigo" class="btn ghost">Código de invitación: ${esc(codigoActual())}</button>
       <div class="hint">Toca una cuenta para reiniciar su PIN, suspenderla o eliminarla. Aprobar y exportar al ERP es solo de las cuentas de administración.</div>
     </div></div>`;
 }
@@ -473,8 +488,9 @@ function vSheet(){
         <div><span>FECHA</span><span>${esc(g.fecha)}</span></div>
       </div>
       ${g.foto?`<img src="${g.foto}" alt="" style="width:100%;max-height:220px;object-fit:contain;margin-top:12px;border-radius:12px;background:#16181c">`:''}
-      <div class="row" style="gap:10px;margin-top:14px">
-        <button data-a="borrar" data-id="${g.id}" class="btn warn">Eliminar</button>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+        <button data-a="fotoG" data-id="${g.id}" class="btn ${g.foto?'ghost':''}">${g.foto?'Cambiar la foto':'Adjuntar la foto ahora'}</button>
+        <button data-a="borrar" data-id="${g.id}" class="btn warn">Eliminar boleta</button>
         <button data-a="cerrar" class="btn ghost">Cerrar</button></div>`;
   } else if(s.t==='usuario'){
     const x = D.usuarios.find(z=>z.correo===s.id) || {};
@@ -484,7 +500,7 @@ function vSheet(){
     inner = `<div class="h2">${esc(x.nombre)}</div>
       <div class="hint" style="margin-top:7px">${esc(x.correo)} · ${esc(x.cargo||'')}</div>
       <div class="rows" style="margin:14px 0 0">
-        <div><span>ROL</span><span>${x.rol==='jefe'?'Aprobador':'Campo'}</span></div>
+        <div><span>ROL</span><span>${x.admin?'Administrador':(x.rol==='jefe'?'Aprobador':'Carga boletas')}</span></div>
         <div><span>ESTADO</span><span>${x.activo?'Activa':'Por activar'}</span></div>
         <div><span>BOLETAS EN ESTE TELÉFONO</span><span>${gastosSuyos}</span></div>
       </div>
@@ -509,6 +525,7 @@ function vSheet(){
       </div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
         ${e.id===D.eventoActivo? '<div class="btn off">Ya es la rendición activa</div>' : `<button data-a="evento" data-id="${e.id}" class="btn">Usar como rendición activa</button>`}
+        <button data-a="capEv" data-id="${e.id}" class="btn ghost">Cargar boleta a este evento</button>
         <button data-a="evdel" data-id="${e.id}" class="btn warn">Eliminar evento</button>
         <button data-a="cerrar" class="btn ghost">Cerrar</button>
       </div>
@@ -523,13 +540,20 @@ function vSheet(){
       <div class="row" style="gap:10px;margin-top:16px"><button data-a="cerrar" class="btn ghost">Cancelar</button>
       <button data-a="evsave" class="btn">Agendar</button></div>`;
   } else if(s.t==='invitar'){
-    inner = `<div class="h2">Invitar</div><div class="hint" style="margin-top:8px">Se agrega a la lista. La persona entra con el código <b class="mono">${CODIGO_INVITACION}</b> y crea su PIN. Solo carga boletas: no aprueba ni exporta.</div>
+    inner = `<div class="h2">Invitar</div><div class="hint" style="margin-top:8px">Se agrega a la lista. La persona entra con el código <b class="mono">${esc(codigoActual())}</b> y crea su PIN. Solo carga boletas: no aprueba ni exporta.</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
         <div class="field"><div class="lbl">Nombre</div><input id="in" placeholder="Nombre y apellido"></div>
         <div class="field"><div class="lbl">Correo</div><input id="ic" type="email" placeholder="cualquier@correo.com"></div>
       </div>
       <div class="row" style="gap:10px;margin-top:16px"><button data-a="cerrar" class="btn ghost">Cancelar</button>
       <button data-a="invsave" class="btn">Invitar</button></div>`;
+  } else if(s.t==='codigo'){
+    inner = `<div class="h2">Código de invitación</div>
+      <div class="hint" style="margin-top:8px">Con este código se registra el personal y los externos. Cámbialo cuando quieras cerrar el registro.</div>
+      <div class="field" style="margin-top:14px"><div class="lbl">Código</div>
+        <input id="cd" value="${esc(codigoActual())}" class="mono"></div>
+      <div class="row" style="gap:10px;margin-top:16px"><button data-a="cerrar" class="btn ghost">Cancelar</button>
+      <button data-a="cdsave" class="btn">Guardar</button></div>`;
   } else if(s.t==='pin'){
     inner = `<div class="h2">Cambiar PIN</div>
       <div class="field" style="margin-top:14px"><div class="lbl">Nuevo PIN (4 dígitos)</div>
@@ -556,11 +580,11 @@ document.addEventListener('click', async (e) => {
       const n=(document.getElementById('xn').value||'').trim();
       const c=(document.getElementById('xc').value||'').trim();
       const k=(document.getElementById('xk').value||'').trim().toUpperCase();
-      if(n.split(/\s+/).length<2 || !/.+@.+\..+/.test(c) || k!==CODIGO_INVITACION){ U.err='Datos incompletos o código inválido.'; return render(); }
+      if(n.split(/\s+/).length<2 || !/.+@.+\..+/.test(c) || k!==codigoActual()){ U.err='Datos incompletos o código inválido.'; return render(); }
       const ya=D.usuarios.findIndex(x=>x.correo===c);
       if(ya>=0){ U.sel=ya; U.nuevo=null; U.pin=''; U.err='';
         U.paso=(D.usuarios[ya].activo && D.usuarios[ya].pin)?'pin':'nuevo'; return render(); }
-      U.nuevo={nombre:n,cargo:'Externo · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true};
+      U.nuevo={nombre:n,cargo:'Carga boletas · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true};
       U.paso='nuevo'; U.pin=''; U.err=''; return render();
     }
     case 'back': U.paso = (U.paso==='usuario' || U.paso==='externo') ? (U.paso==='externo' ? 'usuario' : 'inicio') : (U.nuevo ? 'externo' : 'usuario'); U.pin=''; U.err=''; if(U.paso!=='externo') U.nuevo=null; return render();
@@ -588,7 +612,9 @@ document.addEventListener('click', async (e) => {
     case 'sheet': U.sheet={t:b.dataset.s,id:b.dataset.id}; return render();
     case 'cerrar': U.sheet=null; return render();
 
-    case 'cap': U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',foto:null,fecha:hoy()}; U.foco='monto'; return render();
+    case 'cap': U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',prov:'',foto:null,fecha:hoy()}; U.foco='monto'; U.sheet=null; return render();
+    case 'capEv': D.eventoActivo=b.dataset.id; await save(); U.sheet=null;
+      U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',prov:'',foto:null,fecha:hoy()}; U.foco='monto'; return render();
     case 'capx': U.cap=null; return render();
     case 'tipo': U.cap.tipo=b.dataset.t; if(U.cap.tipo==='Sin doc.'){U.cap.rut='';U.cap.folio='';U.foco='monto';} else U.foco='rut'; return render();
     case 'cat': U.cap.categoria=b.dataset.k; return render();
@@ -600,18 +626,38 @@ document.addEventListener('click', async (e) => {
       else { c.folio = k==='⌫'? c.folio.slice(0,-1) : (c.folio.length>=8? c.folio : c.folio+k); }
       return render();
     }
-    case 'foto': document.getElementById('cam').click(); return;
+    case 'foto': U.fotoPara=null; document.getElementById('cam').click(); return;
+    case 'fotoG': U.fotoPara=b.dataset.id; document.getElementById('cam').click(); return;
     case 'capsave': {
       const c=U.cap, sinDoc=c.tipo==='Sin doc.';
       if(c.total<=0) return toast('Ingresa el total del documento.');
       if(!sinDoc && (c.rut.length<8 || !c.folio)) return toast('Contabilidad necesita RUT y folio.');
       D.gastos.push({id:uid(),usuario:D.sesion,evento:evActivo().id,total:c.total,tipo:c.tipo,rut:c.rut,folio:c.folio,
-        categoria:c.categoria,proveedor:c.tipo+(c.folio?' #'+c.folio:'')+' · '+c.categoria,foto:c.foto,fecha:c.fecha,estado:'cola'});
+        categoria:c.categoria,proveedor:(c.prov||'').trim() || (c.tipo+(c.folio?' #'+c.folio:'')+' · '+c.categoria),foto:c.foto,fecha:c.fecha,estado:'cola'});
       await save(); U.cap=null; U.tab='inicio';
       return toast(c.foto? 'Boleta guardada en el teléfono.' : 'Guardada sin foto — recuerda adjuntarla.');
     }
     case 'borrar': D.gastos=D.gastos.filter(g=>g.id!==b.dataset.id); await save(); U.sheet=null; return toast('Boleta eliminada.');
 
+    case 'cdsave': {
+      const v=(document.getElementById('cd').value||'').trim().toUpperCase();
+      if(v.length<4) return toast('El código debe tener al menos 4 caracteres.');
+      D.codigo=v; await save(); U.sheet=null; return toast('Código actualizado: '+v);
+    }
+    case 'instalar': {
+      if(window.__ip){ window.__ip.prompt(); window.__ip=null; return; }
+      return toast('En iPhone: botón Compartir → Agregar a inicio. En Android: menú ⋮ → Instalar aplicación.');
+    }
+    case 'fotosR': {
+      const r=D.rendiciones[U.rend]; let n=0;
+      r.gastos.forEach((g,i)=>{ if(!g.foto) return; n++;
+        setTimeout(()=>{ fetch(g.foto).then(x=>x.blob()).then(bl=>bajar(bl,'boleta-'+(g.folio||i+1)+'.jpg')); }, i*400); });
+      return toast(n? 'Descargando '+n+' comprobante(s).' : 'Esta rendición no tiene fotos.');
+    }
+    case 'rendel': {
+      if(!confirm('¿Quitar esta rendición de la bandeja? El CSV ya exportado no cambia.')) return;
+      D.rendiciones.splice(U.rend,1); await save(); U.rend=null; return toast('Rendición quitada.');
+    }
     case 'urol': {
       const x=D.usuarios.find(z=>z.correo===b.dataset.id);
       if(!x.admin) return toast('Solo las cuentas de administración STAGECORE aprueban rendiciones.');
@@ -720,13 +766,13 @@ function bajar(blob,nombre){
 }
 function csv(filas,nombre){
   if(!filas.length) return toast('Nada que exportar.');
-  const cab=['fecha','evento','usuario','tipo_documento','rut_proveedor','folio','categoria','total','neto','iva','estado','aprobada_por'];
+  const cab=['fecha','evento','usuario','tipo_documento','rut_proveedor','folio','proveedor','categoria','total','neto','iva','estado','aprobada_por'];
   const ev=(id)=>((D.eventos||[]).find(e=>e.id===id)||{}).nombre||id;
   const lin=filas.map(g=>{
     const neto=g.tipo==='Factura'?Math.round(g.total/1.19):g.total;
     const iva=g.tipo==='Factura'?g.total-neto:0;
     return [g.fecha,g.nombreEvento||ev(g.evento),g.nombreUsuario||g.usuario,g.tipo,g.rut?fmtRut(g.rut):'',g.folio||'',
-      g.categoria,g.total,neto,iva,g.estado||'',g.aprobadaPor||''].map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(';');
+      g.proveedor||'',g.categoria,g.total,neto,iva,g.estado||'',g.aprobadaPor||''].map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(';');
   });
   bajar(new Blob(['\uFEFF'+cab.join(';')+'\n'+lin.join('\n')],{type:'text/csv;charset=utf-8'}), nombre+'-'+hoy()+'.csv');
   toast('CSV generado. Se abre en Excel y se importa al ERP.');
@@ -735,8 +781,16 @@ function csv(filas,nombre){
 /* cámara */
 document.getElementById('cam').addEventListener('change', async (e) => {
   const f=e.target.files && e.target.files[0]; e.target.value='';
-  if(!f || !U.cap) return;
-  U.cap.foto = await comprimir(f);
+  if(!f) return;
+  const foto = await comprimir(f);
+  if(U.fotoPara){
+    const g=(D.gastos||[]).find(x=>x.id===U.fotoPara);
+    U.fotoPara=null;
+    if(g){ g.foto=foto; g.estado='cola'; await save(); U.sheet=null; render(); return toast('Foto adjuntada a la boleta.'); }
+    return;
+  }
+  if(!U.cap) return;
+  U.cap.foto = foto;
   render();
 });
 function comprimir(file){
