@@ -99,6 +99,142 @@ function db(){return new Promise((res,rej)=>{const r=indexedDB.open(DB,1);
 async function kvGet(k){const d=await db();return new Promise((res,rej)=>{const t=d.transaction(STORE,'readonly').objectStore(STORE).get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error);});}
 async function kvSet(k,v){const d=await db();return new Promise((res,rej)=>{const t=d.transaction(STORE,'readwrite').objectStore(STORE).put(v,k);t.onsuccess=()=>res();t.onerror=()=>rej(t.error);});}
 
+/* ---------- nube (Supabase) ---------- */
+const SB = {
+  url: 'https://uidkriwygqncdwhogwrm.supabase.co',
+  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVpZGtyaXd5Z3FuY2R3aG9nd3JtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NjQyMzUsImV4cCI6MjEwMzM0MDIzNX0.PS5KL0KQksiAv2Ov3-Qm3OTQddO7pWT3Byhqck2lxyg'
+};
+const SUFIJO = 'sc26';            // el PIN viaja como contraseña PIN+sufijo (mínimo de Supabase)
+const TABLAS = [['usuarios','correo'],['eventos','id'],['gastos','id'],['rendiciones','id']];
+let TOKEN = null, SYNC = {estado:'local', pend:0, cuando:null};
+const FOTOS = {};
+
+const hAuth = () => ({apikey:SB.key,'Content-Type':'application/json'});
+const hApi = () => ({apikey:SB.key,Authorization:'Bearer '+TOKEN,'Content-Type':'application/json'});
+
+async function sbToken(body, q){
+  const r = await fetch(SB.url+'/auth/v1/'+q, {method:'POST',headers:hAuth(),body:JSON.stringify(body)});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) return {error: j.error_description || j.msg || j.error || 'error'};
+  if(j.access_token){ TOKEN=j.access_token; await kvSet('refresh', j.refresh_token); }
+  return {ok:true, sesion: !!j.access_token};
+}
+const sbEntrar   = (correo,pin) => sbToken({email:correo,password:pin+SUFIJO}, 'token?grant_type=password');
+const sbCrear    = (correo,pin) => sbToken({email:correo,password:pin+SUFIJO}, 'signup');
+async function sbRetomar(){
+  const rt = await kvGet('refresh'); if(!rt) return false;
+  const r = await sbToken({refresh_token:rt}, 'token?grant_type=refresh_token');
+  return !!r.ok;
+}
+
+async function sbLeer(tabla){
+  const r = await fetch(SB.url+'/rest/v1/'+tabla+'?select=*', {headers:hApi()});
+  if(!r.ok) throw new Error(tabla+' '+r.status);
+  return r.json();
+}
+async function sbGuardar(tabla, filas){
+  if(!filas.length) return;
+  const r = await fetch(SB.url+'/rest/v1/'+tabla+'?on_conflict=id',
+    {method:'POST',headers:{...hApi(),Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(filas)});
+  if(!r.ok) throw new Error(tabla+' '+r.status+' '+(await r.text()).slice(0,120));
+}
+async function sbBorrar(tabla, id){
+  await fetch(SB.url+'/rest/v1/'+tabla+'?id=eq.'+encodeURIComponent(id), {method:'DELETE',headers:hApi()});
+}
+
+async function subirFoto(id, dataUrl){
+  const blob = await (await fetch(dataUrl)).blob();
+  const nombre = id+'.jpg';
+  const r = await fetch(SB.url+'/storage/v1/object/boletas/'+nombre,
+    {method:'POST',headers:{apikey:SB.key,Authorization:'Bearer '+TOKEN,'Content-Type':blob.type||'image/jpeg','x-upsert':'true'},body:blob});
+  return r.ok ? 'sb:'+nombre : null;
+}
+async function bajarFoto(marca){
+  try{
+    const r = await fetch(SB.url+'/storage/v1/object/boletas/'+marca.slice(3), {headers:{apikey:SB.key,Authorization:'Bearer '+TOKEN}});
+    if(!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  }catch(e){ return null; }
+}
+function imgAttrs(f){
+  if(!f) return 'src=""';
+  if(f.slice(0,5)==='data:') return 'src="'+f+'"';
+  return FOTOS[f] ? 'src="'+FOTOS[f]+'"' : 'src="" data-sb="'+esc(f)+'"';
+}
+async function hidratarFotos(){
+  for(const el of document.querySelectorAll('img[data-sb]')){
+    const k = el.dataset.sb;
+    if(FOTOS[k]){ el.src=FOTOS[k]; el.removeAttribute('data-sb'); continue; }
+    if(!TOKEN) continue;
+    const u = await bajarFoto(k);
+    if(u){ FOTOS[k]=u; el.src=u; el.removeAttribute('data-sb'); }
+  }
+}
+
+function pendientes(snap){
+  let n = 0;
+  for(const [tb,pk] of TABLAS){
+    const prev = (snap||{})[tb] || {};
+    for(const f of (D[tb]||[])) if(prev[String(f[pk])] !== JSON.stringify(f)) n++;
+  }
+  for(const g of (D.gastos||[])) if(g.foto && g.foto.slice(0,5)==='data:') n++;
+  return n;
+}
+
+let syncCorriendo = false;
+async function sincronizar(manual){
+  if(syncCorriendo) return;
+  if(!navigator.onLine){ SYNC.estado='sinred'; return; }
+  if(!TOKEN && !(await sbRetomar())){ SYNC.estado='local'; if(manual) toast('Sin sesión en la nube. Vuelve a entrar con tu PIN.'); return; }
+  syncCorriendo = true; SYNC.estado='subiendo'; render();
+  try{
+    let snap = (await kvGet('snap')) || {};
+    // fotos primero: la boleta viaja con la URL, no con la imagen
+    for(const g of (D.gastos||[])){
+      if(g.foto && g.foto.slice(0,5)==='data:'){
+        const marca = await subirFoto(g.id, g.foto);
+        if(marca){ FOTOS[marca]=g.foto; g.foto=marca; }
+      }
+    }
+    for(const [tb,pk] of TABLAS){
+      const local = D[tb]||[], prev = snap[tb]||{};
+      const cambios = local.filter(f => prev[String(f[pk])] !== JSON.stringify(f));
+      await sbGuardar(tb, cambios.map(f=>({
+        id: String(f[pk]),
+        datos: tb==='usuarios' ? (({pin, ...resto}) => resto)(f) : f,
+        actualizado: new Date().toISOString()
+      })));
+      for(const id of Object.keys(prev)) if(!local.some(f=>String(f[pk])===id)) await sbBorrar(tb, id);
+    }
+    SYNC.estado='bajando'; render();
+    for(const [tb,pk] of TABLAS){
+      const remoto = await sbLeer(tb);
+      const local = D[tb]||[], prev = snap[tb]||{};
+      let nuevos = remoto.map(r=>r.datos).filter(Boolean);
+      if(tb==='usuarios') nuevos = nuevos.map(r => {
+        const mio = local.find(l => String(l[pk])===String(r[pk]));
+        return mio && mio.pin ? {...r, pin:mio.pin} : r;
+      });
+      const idsRemotos = new Set(nuevos.map(f=>String(f[pk])));
+      // lo que quedó solo aquí y nunca estuvo en la nube (agregado sin señal) se conserva
+      const soloLocal = local.filter(f => !idsRemotos.has(String(f[pk])) && prev[String(f[pk])]===undefined);
+      D[tb] = nuevos.concat(soloLocal);
+    }
+    snap = {};
+    for(const [tb,pk] of TABLAS){ snap[tb]={}; for(const f of (D[tb]||[])) snap[tb][String(f[pk])]=JSON.stringify(f); }
+    await kvSet('snap', snap);
+    await kvSet('data', D);
+    SYNC.pend = 0; SYNC.cuando = new Date(); SYNC.estado='ok';
+    if(manual) toast('Todo sincronizado con la nube.');
+  }catch(e){
+    SYNC.estado='error';
+    SYNC.motivo = /PGRST205|404|Could not find/i.test(e.message)
+      ? 'Falta crear las tablas: corre supabase.sql en el SQL Editor.'
+      : (/401|403|JWT/i.test(e.message) ? 'Sesión vencida. Vuelve a entrar con tu PIN.' : 'No se pudo sincronizar: '+e.message);
+    if(manual) toast(SYNC.motivo);
+  }finally{ syncCorriendo=false; render(); }
+}
+
 /* ---------- datos iniciales ---------- */
 const USUARIOS = [
  {nombre:'Gerson Salas',cargo:'Administrador',correo:'gerson@stagecore.cl',rol:'jefe',pin:'1234',activo:true,admin:true},
@@ -129,7 +265,12 @@ const yo = () => (D.usuarios||[]).find(u=>u.correo===D.sesion) || null;
 const evActivo = () => (D.eventos||[]).find(e=>e.id===D.eventoActivo) || (D.eventos||[])[0];
 const misGastos = () => (D.gastos||[]).filter(g=>g.usuario===D.sesion && g.evento===(evActivo()||{}).id);
 
-async function save(){ await kvSet('data', D); }
+async function save(){
+  await kvSet('data', D);
+  SYNC.pend = pendientes(await kvGet('snap'));
+  clearTimeout(window.__sy);
+  window.__sy = setTimeout(()=>sincronizar(false), 1200);
+}
 function toast(t){ U.toast=t; render(); clearTimeout(window.__t); window.__t=setTimeout(()=>{U.toast='';render();},3000); }
 
 /* ---------- arranque ---------- */
@@ -149,6 +290,11 @@ function toast(t){ U.toast=t; render(); clearTimeout(window.__t); window.__t=set
   if(D.sesion && yo() && yo().rol==='jefe') U.tab='bandeja';
   render();
   if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+  SYNC.pend = pendientes(await kvGet('snap'));
+  if(D.sesion) sincronizar(false);
+  window.addEventListener('online', ()=>sincronizar(false));
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && D.sesion) sincronizar(false); });
+  setInterval(()=>{ if(D.sesion && !document.hidden) sincronizar(false); }, 60000);
 })();
 
 /* ---------- render ---------- */
@@ -158,6 +304,7 @@ function render(){
     + (U.toast ? '<div class="toast">'+esc(U.toast)+'</div>' : '')
     + (U.sheet ? vSheet() : '');
   if(U.view==='app' && U.rend!=null && !U.sheet) initSig();
+  hidratarFotos();
 }
 
 /* ---------- login ---------- */
@@ -239,6 +386,15 @@ function keys(kind){
 }
 function ini(n){const p=String(n||'').trim().split(/\s+/);return ((p[0]||'')[0]||'')+((p[1]||'')[0]||'');}
 
+function textoSync(){
+  if(SYNC.estado==='subiendo') return 'SUBIENDO…';
+  if(SYNC.estado==='bajando') return 'ACTUALIZANDO…';
+  if(SYNC.estado==='error') return 'ERROR · REINTENTAR ↻';
+  if(!navigator.onLine) return SYNC.pend ? SYNC.pend+' EN ESPERA' : 'SIN SEÑAL';
+  if(SYNC.pend) return SYNC.pend+' POR SUBIR ↻';
+  return SYNC.cuando ? 'EN LA NUBE '+SYNC.cuando.toTimeString().slice(0,5) : 'SINCRONIZAR ↻';
+}
+
 /* ---------- app ---------- */
 function vApp(){
   const u = yo(); if(!u){ U.view='login'; return vLogin(); }
@@ -263,8 +419,8 @@ function vApp(){
          <button data-a="cap" class="fab" aria-label="Cargar boleta" title="Cargar boleta"><span>+</span></button>
          <button data-a="tab" data-t="perfil" class="${U.tab==='perfil'?'on':''}">PERFIL</button></div>`;
   }
-  const cola = (D.gastos||[]).filter(g=>g.estado==='cola').length;
-  return `<div class="top"><span class="mono">${navigator.onLine?'CONECTADO':'SIN SEÑAL'}</span><span class="mono">${cola?cola+' POR SINCRONIZAR':'TODO GUARDADO'}</span></div>
+  return `<div class="top"><span class="mono">${navigator.onLine?'CONECTADO':'SIN SEÑAL'}</span>
+      <button data-a="sync" class="mono" style="color:${SYNC.estado==='error'?'#e08bc0':(SYNC.pend?'#8f7bff':'#6a6d73')}">${textoSync()}</button></div>
     <div class="brand"><img src="logo.png" alt="STAGECORE Visual Rental">
       <div class="meta mono">${esc(u.nombre.split(' ')[0].toUpperCase())}<br>${u.admin?'ADMIN':(jefe?'APROBADOR':'CARGA BOLETAS')}</div></div>
     ${body}${nav}`;
@@ -325,7 +481,7 @@ function vCaptura(){
     <div class="pad" style="padding-bottom:0">
       ${c.foto
         ? `<div class="row" style="gap:12px;align-items:center">
-             <img src="${c.foto}" alt="" style="width:74px;height:74px;flex:none;object-fit:cover;border-radius:12px;border:1px solid #22252a">
+             <img ${imgAttrs(c.foto)} alt="" style="width:74px;height:74px;flex:none;object-fit:cover;border-radius:12px;border:1px solid #22252a">
              <div style="flex:1;min-width:0"><div class="mono" style="font-size:11px;color:#4fbf7f">RESPALDO ADJUNTO</div>
                <button data-a="galeria" class="mono mini" style="font-size:11px;color:#8f7bff;text-decoration:underline">Cambiar el respaldo</button></div>
            </div>`
@@ -408,7 +564,7 @@ function vPerfil(){
       <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
       <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
-      <div class="hint mono">STAGECORE Rendiciones · v14</div>
+      <div class="hint mono">STAGECORE Rendiciones · v17 · nube</div>
     </div></div>`;
 }
 
@@ -445,7 +601,7 @@ function vRevision(){
       <div class="sub">${esc(r.nombreEvento)} · ${r.gastos.length} boletas · enviada ${esc(r.enviada||'')}</div>
       <div class="big">${money(r.total)}</div></div>
     <div class="pad" style="padding-bottom:6px"><div class="lbl">Comprobantes</div></div>
-    <div class="grid3">${r.gastos.map(g=>g.foto?`<img src="${g.foto}" alt="">`:'<div class="ph" style="display:grid;place-items:center;font-size:9px;color:#e08bc0">SIN FOTO</div>').join('')}</div>
+    <div class="grid3">${r.gastos.map(g=>g.foto?`<img ${imgAttrs(g.foto)} alt="">`:'<div class="ph" style="display:grid;place-items:center;font-size:9px;color:#e08bc0">SIN FOTO</div>').join('')}</div>
     <div class="pad">${r.gastos.map(g=>`<div class="row" style="justify-content:space-between;padding:9px 0;border-bottom:1px solid #1c1e22;font-size:13px">
       <span>${esc(g.tipo)} ${g.folio?'#'+esc(g.folio):'sin folio'} · ${esc(g.categoria)}</span><b>${money(g.total)}</b></div>`).join('')}</div>
     ${r.estado==='enviada' ? `<div class="pad" style="padding-top:0">
@@ -507,7 +663,7 @@ function vSheet(){
         <div><span>CATEGORÍA</span><span>${esc(g.categoria)}</span></div>
         <div><span>FECHA</span><span>${esc(g.fecha)}</span></div>
       </div>
-      ${g.foto?`<img src="${g.foto}" alt="" style="width:100%;max-height:220px;object-fit:contain;margin-top:12px;border-radius:12px;background:#16181c">`:''}
+      ${g.foto?`<img ${imgAttrs(g.foto)} alt="" style="width:100%;max-height:220px;object-fit:contain;margin-top:12px;border-radius:12px;background:#16181c">`:''}
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
         <button data-a="galeriaG" data-id="${g.id}" class="btn ${g.foto?'ghost':''}">${g.foto?'Cambiar el respaldo':'Subir boleta o documento de respaldo'}</button>
         <button data-a="borrar" data-id="${g.id}" class="btn warn">Eliminar boleta</button>
@@ -617,17 +773,35 @@ document.addEventListener('click', async (e) => {
     case 'enter': {
       if(U.pin.length<4){ U.err='Ingresa los 4 dígitos.'; return render(); }
       if(U.paso==='nuevo'){
+        const correo = U.nuevo ? U.nuevo.correo : D.usuarios[U.sel].correo;
+        if(navigator.onLine){
+          let r = await sbCrear(correo, U.pin);
+          if(r.error && /already|registered|exists/i.test(r.error)) r = await sbEntrar(correo, U.pin);
+          if(r.error){ U.err=r.error; return render(); }
+          if(!r.sesion){ U.err='Falta desactivar "Confirm email" en Supabase → Authentication → Email.'; return render(); }
+        }
         if(U.nuevo){ D.usuarios.push({...U.nuevo, pin:U.pin, activo:true}); D.sesion=U.nuevo.correo; }
         else { D.usuarios[U.sel].pin=U.pin; D.usuarios[U.sel].activo=true; D.sesion=D.usuarios[U.sel].correo; }
         await save(); U.view='app'; U.pin=''; U.nuevo=null; U.tab = yo().rol==='jefe'?'bandeja':'inicio';
+        sincronizar(false);
         return toast('Cuenta activada. Bienvenido, '+yo().nombre.split(' ')[0]+'.');
       }
       const us=D.usuarios[U.sel];
-      if(U.pin!==us.pin){ U.pin=''; U.err='PIN incorrecto.'; return render(); }
+      if(navigator.onLine){
+        let r = await sbEntrar(us.correo, U.pin);
+        if(r.error){
+          if(U.pin!==us.pin){ U.pin=''; U.err='PIN incorrecto.'; return render(); }
+          r = await sbCrear(us.correo, U.pin);              // cuenta que aún no existía en la nube
+          if(r.ok && !r.sesion){ U.err='Falta desactivar "Confirm email" en Supabase → Authentication → Email.'; return render(); }
+        }
+      } else if(U.pin!==us.pin){ U.pin=''; U.err='PIN incorrecto.'; return render(); }
+      us.pin=U.pin;
       D.sesion=us.correo; await save(); U.view='app'; U.pin=''; U.tab = us.rol==='jefe'?'bandeja':'inicio';
+      sincronizar(false);
       return toast('Hola, '+us.nombre.split(' ')[0]+'.');
     }
-    case 'salir': D.sesion=null; await save(); U={...U,view:'login',paso:'inicio',pin:'',err:'',cap:null,rend:null,sheet:null}; return render();
+    case 'sync': return sincronizar(true);
+    case 'salir': D.sesion=null; TOKEN=null; await kvSet('refresh',null); await save(); U={...U,view:'login',paso:'inicio',pin:'',err:'',cap:null,rend:null,sheet:null}; return render();
     case 'tab': U.tab=b.dataset.t; U.sheet=null; return render();
     case 'sheet': U.sheet={t:b.dataset.s,id:b.dataset.id}; return render();
     case 'cerrar': U.sheet=null; return render();
