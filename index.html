@@ -50,13 +50,18 @@ input,select{font:inherit}
 .chip.on{background:#8f7bff;border-color:#8f7bff;color:#0e0f11}
 .chip.no{background:#3a2030;border-color:#5c3049;color:#f0cfe2}
 .nav{flex:none;display:flex;align-items:center;justify-content:space-between;padding:12px 26px calc(env(safe-area-inset-bottom) + 20px);border-top:1px solid #1c1e22;background:#101216}
-.nav button{font-size:11px;letter-spacing:.06em;color:#6a6d73}
+.nav button{font-size:11px;letter-spacing:.06em;color:#6a6d73;padding:14px 4px;min-height:44px;display:flex;align-items:center}
+.nav .fab{padding:0}
+.mini{font-size:12px;padding:12px 4px;min-height:44px;display:inline-flex;align-items:center}
 .nav button.on{color:#f2f2ef;font-weight:600}
 .fab{width:56px;height:56px;border-radius:18px;background:#8f7bff;display:grid;place-items:center;box-shadow:0 8px 24px rgba(143,123,255,.35)}
 .nav .fab{color:#0e0f11;font-size:30px;font-weight:700;line-height:1;letter-spacing:0}
 .nav .fab span{display:block;margin-top:-3px}
-.keys{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;padding:10px 16px 0}
-.keys button{text-align:center;padding:14px 0;border-radius:12px;background:#16181c;border:1px solid #22252a;font-size:18px;font-weight:600}
+.keys{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:8px 16px 0}
+.keys button{text-align:center;padding:11px 0;border-radius:11px;background:#16181c;border:1px solid #22252a;font-size:17px;font-weight:600;min-height:44px;display:flex;align-items:center;justify-content:center}
+.reader{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 18px 0}
+.reader .rl{font-size:10px;letter-spacing:.1em;color:#8a8f97}
+.reader .rv{font-size:22px;font-weight:700;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .field{padding:12px 14px;border-radius:14px;background:#16181c;border:1px solid #22252a}
 .field.on{border-color:#8f7bff}
 .field.dim{background:#131418}
@@ -69,7 +74,7 @@ input,select{font:inherit}
 .rows span:first-child{font-size:11px;color:#8a8f97;letter-spacing:.06em}
 .toast{position:fixed;left:16px;right:16px;bottom:96px;max-width:488px;margin:0 auto;padding:14px 16px;border-radius:14px;background:#f2f2ef;color:#0e0f11;font-size:13px;font-weight:500;line-height:1.35;box-shadow:0 12px 30px rgba(0,0,0,.5);z-index:50}
 .sheet{position:fixed;inset:0;background:rgba(6,7,9,.72);display:flex;align-items:flex-end;z-index:40}
-.sheet .inner{width:100%;max-width:520px;margin:0 auto;background:#141519;border-top:1px solid #24262b;border-radius:24px 24px 0 0;padding:22px 22px calc(env(safe-area-inset-bottom) + 22px)}
+.sheet .inner{width:100%;max-width:520px;margin:0 auto;background:#141519;border-top:1px solid #24262b;border-radius:24px 24px 0 0;padding:22px 22px calc(env(safe-area-inset-bottom) + 22px);max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:0 22px}
 .grid3 img,.grid3 .ph{width:100%;aspect-ratio:3/4;border-radius:10px;object-fit:cover;background:#16181c;border:1px solid #22252a}
 canvas.sig{width:100%;height:110px;border-radius:10px;background:#0e0f11;border:1px dashed #2f3238;touch-action:none;display:block;margin-top:12px}
@@ -312,14 +317,18 @@ function vCaptura(){
   const rutOk = c.rut.length>=8, folioOk = c.folio.length>=1;
   const ok = c.total>0 && (sinDoc || (rutOk&&folioOk));
   const foco = sinDoc && U.foco!=='monto' ? 'monto' : U.foco;
-  return `<div class="scroll" style="display:flex;flex-direction:column">
-    <div class="row" style="justify-content:space-between;padding:6px 22px 0">
-      <button data-a="capx" class="mono" style="font-size:12px;color:#8a8f97">CERRAR</button>
+  return `<div style="display:flex;flex-direction:column;height:100%;min-height:0">
+    <div class="row" style="justify-content:space-between;padding:6px 22px 0;flex:none">
+      <button data-a="capx" class="mono mini" style="color:#8a8f97">CERRAR</button>
       <span class="mono" style="font-size:12px;color:#6a6d73">NUEVA BOLETA</span></div>
+    <div class="scroll">
     <div class="pad" style="padding-bottom:0">
       ${c.foto
-        ? `<img src="${c.foto}" alt="" style="width:100%;max-height:210px;object-fit:cover;border-radius:14px;border:1px solid #22252a">
-           <button data-a="galeria" class="btn ghost" style="margin-top:10px">Cambiar el respaldo</button>`
+        ? `<div class="row" style="gap:12px;align-items:center">
+             <img src="${c.foto}" alt="" style="width:74px;height:74px;flex:none;object-fit:cover;border-radius:12px;border:1px solid #22252a">
+             <div style="flex:1;min-width:0"><div class="mono" style="font-size:11px;color:#4fbf7f">RESPALDO ADJUNTO</div>
+               <button data-a="galeria" class="mono mini" style="font-size:11px;color:#8f7bff;text-decoration:underline">Cambiar el respaldo</button></div>
+           </div>`
         : `<button data-a="galeria" class="btn" style="padding:20px">Subir boleta o documento de respaldo</button>
            <div class="hint" style="margin-top:10px">Cámara o galería del teléfono. Sin señal también funciona: la imagen queda guardada.</div>`}
     </div>
@@ -346,11 +355,15 @@ function vCaptura(){
       <input value="${esc(c.prov||'')}" oninput="setProv(this.value)" placeholder="${c.tipo==='Honorarios'?'Nombre de quien emite la boleta':'Razón social o nombre'}"></div></div>
     <div class="rows"><div><span>EVENTO</span><span>${esc(evActivo().nombre)}</span></div>
       <div><span>FECHA</span><span>${esc(c.fecha)}</span></div></div>
-    <div style="margin-top:auto">
-      <div class="lbl" style="padding:14px 16px 0">Escribiendo: ${foco==='monto'?'TOTAL':(foco==='rut'?'RUT':'FOLIO')}</div>
+    </div>
+    <div style="flex:none;border-top:1px solid #1c1e22;background:#0e0f11">
+      <div class="reader">
+        <span class="rl mono">${foco==='monto'?(c.tipo==='Honorarios'?'BRUTO':'TOTAL'):(foco==='rut'?'RUT':'FOLIO')}</span>
+        <span class="rv">${foco==='monto'?money(c.total):(foco==='rut'?(c.rut?fmtRut(c.rut):'—'):(c.folio||'—'))}</span>
+      </div>
       ${keys('ck')}
-      <div style="padding:12px 16px calc(env(safe-area-inset-bottom) + 20px)">
-        <button data-a="capsave" class="btn ${ok?'':'off'}">${c.total<=0?'Ingresa el total':(!sinDoc&&!rutOk?'Falta el RUT':(!sinDoc&&!folioOk?'Falta el folio':'Guardar boleta'))}</button>
+      <div style="padding:8px 16px calc(env(safe-area-inset-bottom) + 12px)">
+        <button data-a="capsave" class="btn ${ok?'':'off'}" style="padding:14px">${c.total<=0?'Ingresa el total':(!sinDoc&&!rutOk?'Falta el RUT':(!sinDoc&&!folioOk?'Falta el folio':'Guardar boleta'))}</button>
       </div></div></div>`;
 }
 function fmtRut(v){ if(v.length<2) return v; const b=v.slice(0,-1), d=v.slice(-1); return b.replace(/\B(?=(\d{3})+(?!\d))/g,'.')+'-'+d; }
@@ -395,7 +408,7 @@ function vPerfil(){
       <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
       <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
-      <div class="hint mono">STAGECORE Rendiciones · v11</div>
+      <div class="hint mono">STAGECORE Rendiciones · v14</div>
     </div></div>`;
 }
 
@@ -425,7 +438,7 @@ function vRevision(){
   const r = D.rendiciones[U.rend];
   return `<div class="scroll" style="display:flex;flex-direction:column">
     <div class="row" style="justify-content:space-between;padding:6px 22px 0">
-      <button data-a="rendx" class="mono" style="font-size:12px;color:#8a8f97">← BANDEJA</button>
+      <button data-a="rendx" class="mono mini" style="color:#8a8f97">← BANDEJA</button>
       <span class="mono" style="font-size:12px;color:#6a6d73">REVISIÓN</span></div>
     <div class="pad" style="padding-bottom:0">
       <div class="h2">${esc(r.nombreUsuario||r.usuario)}</div>
@@ -440,7 +453,7 @@ function vRevision(){
         <canvas class="sig" id="sig"></canvas>
         <div class="row" style="justify-content:space-between;margin-top:10px">
           <span class="hint">${U.firmado?'Firmado':'Dibuja tu firma con el dedo'}</span>
-          <button data-a="sigclr" class="mono" style="font-size:10px;color:#8f7bff">LIMPIAR</button></div></div>
+          <button data-a="sigclr" class="mono mini" style="font-size:11px;color:#8f7bff">LIMPIAR</button></div></div>
       <div class="row" style="gap:10px;margin-top:14px">
         <button data-a="devolver" class="btn warn">Devolver</button>
         <button data-a="aprobar" class="btn ${U.firmado?'':'off'}">Autorizar pago</button></div>
@@ -482,6 +495,9 @@ function vSheet(){
       <button data-a="cerrar" class="btn ghost" style="margin-top:14px">Cerrar</button>`;
   } else if(s.t==='gasto'){
     const g = D.gastos.find(x=>x.id===s.id);
+    if(!g) return `<div class="sheet" data-a="bg"><div class="inner"><div class="h2">Boleta no encontrada</div>
+      <div class="hint" style="margin-top:8px">Ya fue eliminada o enviada desde otro teléfono.</div>
+      <button data-a="cerrar" class="btn ghost" style="margin-top:14px">Cerrar</button></div></div>`;
     inner = `<div class="h2">${esc(g.proveedor||g.categoria)}</div>
       <div class="rows" style="margin:14px 0 0">
         <div><span>TOTAL</span><b>${money(g.total)}</b></div>
@@ -646,7 +662,11 @@ document.addEventListener('click', async (e) => {
       await save(); U.cap=null; U.tab='inicio';
       return toast(c.foto? 'Boleta guardada en el teléfono.' : 'Guardada sin foto — recuerda adjuntarla.');
     }
-    case 'borrar': D.gastos=D.gastos.filter(g=>g.id!==b.dataset.id); await save(); U.sheet=null; return toast('Boleta eliminada.');
+    case 'borrar': {
+      const g=(D.gastos||[]).find(x=>x.id===b.dataset.id);
+      if(!confirm('¿Eliminar esta boleta'+(g?' de '+money(g.total):'')+'? No se puede deshacer.')) return;
+      D.gastos=D.gastos.filter(x=>x.id!==b.dataset.id); await save(); U.sheet=null; return toast('Boleta eliminada.');
+    }
 
     case 'cdsave': {
       const v=(document.getElementById('cd').value||'').trim().toUpperCase();
@@ -721,7 +741,7 @@ document.addEventListener('click', async (e) => {
       if(n.split(/\s+/).length<2 || !/.+@.+\..+/.test(c)) return toast('Falta nombre completo o correo.');
       if(D.usuarios.some(x=>x.correo.toLowerCase()===c.toLowerCase())) return toast('Ya existe una cuenta con ese correo.');
       D.usuarios.push({nombre:n,cargo:'Carga boletas · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true});
-      await save(); U.sheet=null; return toast('Invitada. Entra con el código '+CODIGO_INVITACION+' y crea su PIN.');
+      await save(); U.sheet=null; return toast('Invitada. Entra con el código '+codigoActual()+' y crea su PIN.');
     }
     case 'pinsave': {
       const p=(document.getElementById('np').value||'').trim();
