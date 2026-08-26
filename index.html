@@ -53,6 +53,7 @@ input,select{font:inherit}
 .nav button{font-size:11px;letter-spacing:.06em;color:#6a6d73;padding:14px 4px;min-height:44px;display:flex;align-items:center}
 .nav .fab{padding:0}
 .mini{font-size:12px;padding:12px 4px;min-height:44px;display:inline-flex;align-items:center}
+.tocable{padding:16px 6px;margin:-16px -6px;display:inline-flex;align-items:center}
 .nav button.on{color:#f2f2ef;font-weight:600}
 .fab{width:56px;height:56px;border-radius:18px;background:#8f7bff;display:grid;place-items:center;box-shadow:0 8px 24px rgba(143,123,255,.35)}
 .nav .fab{color:#0e0f11;font-size:30px;font-weight:700;line-height:1;letter-spacing:0}
@@ -81,7 +82,7 @@ canvas.sig{width:100%;height:110px;border-radius:10px;background:#0e0f11;border:
 .ok{color:#4fbf7f}.warnc{color:#e0c15f}.bad{color:#e08bc0}.dimc{color:#6a6d73}
 .avatar{width:38px;height:38px;border-radius:19px;background:#22252a;flex:none;display:grid;place-items:center;font-size:13px;font-weight:600;color:#c9ccd2}
 .tag{display:inline-block;padding:4px 8px;border-radius:7px;font-size:10px;font-weight:600;letter-spacing:.04em}
-.hint{font-size:11px;line-height:1.5;color:#6a6d73}
+.hint{font-size:12px;line-height:1.5;color:#9aa0a8}
 .center{display:grid;place-items:center;height:100%}
 </style>
 </head>
@@ -89,7 +90,6 @@ canvas.sig{width:100%;height:110px;border-radius:10px;background:#0e0f11;border:
 <div id="app"><div class="center"><div class="hint">Cargando…</div></div></div>
 <input type="file" id="cam" accept="image/*" capture="environment" hidden>
 <input type="file" id="gal" accept="image/*" hidden>
-<input type="file" id="imp" accept=".json,application/json" hidden>
 
 <script>
 /* ---------- almacenamiento (IndexedDB) ---------- */
@@ -125,6 +125,28 @@ async function sbRetomar(){
   const rt = await kvGet('refresh'); if(!rt) return false;
   const r = await sbToken({refresh_token:rt}, 'token?grant_type=refresh_token');
   return !!r.ok;
+}
+
+async function sbRecuperar(correo){
+  const volver = location.origin + location.pathname;
+  const r = await fetch(SB.url+'/auth/v1/recover?redirect_to='+encodeURIComponent(volver),
+    {method:'POST',headers:hAuth(),body:JSON.stringify({email:correo})});
+  if(r.ok) return {ok:true};
+  const j = await r.json().catch(()=>({}));
+  return {error: j.msg || j.error_description || ('error '+r.status)};
+}
+
+async function sbQuienSoy(){
+  const r = await fetch(SB.url+'/auth/v1/user',{headers:hApi()});
+  if(!r.ok) return null;
+  const j = await r.json().catch(()=>null);
+  return j && j.email ? j.email.toLowerCase() : null;
+}
+async function sbNuevaClave(pin){
+  const r = await fetch(SB.url+'/auth/v1/user',{method:'PUT',headers:hApi(),body:JSON.stringify({password:pin+SUFIJO})});
+  if(r.ok) return {ok:true};
+  const j = await r.json().catch(()=>({}));
+  return {error: j.msg || j.error_description || ('error '+r.status)};
 }
 
 async function sbLeer(tabla){
@@ -173,9 +195,11 @@ async function hidratarFotos(){
 
 function pendientes(snap){
   let n = 0;
+  const adm = !!((D.usuarios||[]).find(u=>norm(u.correo)===norm(D.sesion))||{}).admin;
   for(const [tb,pk] of TABLAS){
+    if(tb==='eventos' && !adm) continue;
     const prev = (snap||{})[tb] || {};
-    for(const f of (D[tb]||[])) if(prev[String(f[pk])] !== JSON.stringify(f)) n++;
+    for(const f of (D[tb]||[])) if(prev[tb==='usuarios'?norm(f.correo):String(f[pk])] !== JSON.stringify(f)) n++;
   }
   for(const g of (D.gastos||[])) if(g.foto && g.foto.slice(0,5)==='data:') n++;
   return n;
@@ -190,42 +214,100 @@ async function sincronizar(manual){
   try{
     let snap = (await kvGet('snap')) || {};
     // fotos primero: la boleta viaja con la URL, no con la imagen
+    const marcas = {};
     for(const g of (D.gastos||[])){
       if(g.foto && g.foto.slice(0,5)==='data:'){
         const marca = await subirFoto(g.id, g.foto);
         if(marca){ FOTOS[marca]=g.foto; g.foto=marca; }
       }
+      if(g.foto) marcas[g.id] = g.foto;
     }
+    for(const r of (D.rendiciones||[])){
+      for(const g of (r.gastos||[])){
+        if(!g.foto || g.foto.slice(0,5)!=='data:') continue;
+        if(marcas[g.id] && marcas[g.id].slice(0,3)==='sb:'){ g.foto = marcas[g.id]; continue; }
+        const marca = await subirFoto(g.id, g.foto);
+        if(marca){ FOTOS[marca]=g.foto; g.foto=marca; marcas[g.id]=marca; }
+      }
+    }
+    const adm = !!(yo()||{}).admin;
+    const rechazos = [];
     for(const [tb,pk] of TABLAS){
-      const local = D[tb]||[], prev = snap[tb]||{};
-      const cambios = local.filter(f => prev[String(f[pk])] !== JSON.stringify(f));
-      await sbGuardar(tb, cambios.map(f=>({
-        id: String(f[pk]),
-        datos: tb==='usuarios' ? (({pin, ...resto}) => resto)(f) : f,
-        actualizado: new Date().toISOString()
-      })));
-      for(const id of Object.keys(prev)) if(!local.some(f=>String(f[pk])===id)) await sbBorrar(tb, id);
+      if(tb==='eventos' && !adm) continue;          // la agenda la manda la administración
+      try{
+        const local = D[tb]||[], prev = snap[tb]||{};
+        const cambios = local.filter(f => prev[tb==='usuarios'?norm(f.correo):String(f[pk])] !== JSON.stringify(f));
+        await sbGuardar(tb, cambios.map(f=>({
+          id: tb==='usuarios' ? norm(f.correo) : String(f[pk]),
+          datos: tb==='usuarios' ? (({pin, ...resto}) => resto)(f) : f,
+          actualizado: new Date().toISOString()
+        })));
+        for(const id of Object.keys(prev)) if(!local.some(f=>(tb==='usuarios'?norm(f.correo):String(f[pk]))===id)) await sbBorrar(tb, id);
+      }catch(e){
+        if(/42501|401|403/.test(e.message)) rechazos.push(tb); else throw e;
+      }
     }
     SYNC.estado='bajando'; render();
     for(const [tb,pk] of TABLAS){
       const remoto = await sbLeer(tb);
       const local = D[tb]||[], prev = snap[tb]||{};
       let nuevos = remoto.map(r=>r.datos).filter(Boolean);
-      if(tb==='usuarios') nuevos = nuevos.map(r => {
-        const mio = local.find(l => String(l[pk])===String(r[pk]));
-        return mio && mio.pin ? {...r, pin:mio.pin} : r;
-      });
-      const idsRemotos = new Set(nuevos.map(f=>String(f[pk])));
+
+      if(tb==='usuarios'){
+        // la nube puede traer correos con mayúsculas de versiones anteriores
+        for(const f of remoto){
+          if(f.datos && String(f.id) !== norm(f.datos.correo)) await sbBorrar('usuarios', f.id);
+        }
+        nuevos = nuevos.map(r => {
+          const c = norm(r.correo);
+          const mio = local.find(l => norm(l.correo)===c);
+          return {...r, correo:c, pin: (mio && mio.pin) || r.pin || ''};
+        });
+      }
+      if(tb==='gastos') nuevos = nuevos.map(r => ({...r, usuario: norm(r.usuario)}));
+      if(tb==='rendiciones') nuevos = nuevos.map(r => ({...r, usuario: norm(r.usuario),
+        gastos: (r.gastos||[]).map(g=>({...g, usuario: norm(g.usuario)}))}));
+
+      const clave = (f) => tb==='usuarios' ? norm(f.correo) : String(f[pk]);
+      const idsRemotos = new Set(nuevos.map(clave));
       // lo que quedó solo aquí y nunca estuvo en la nube (agregado sin señal) se conserva
-      const soloLocal = local.filter(f => !idsRemotos.has(String(f[pk])) && prev[String(f[pk])]===undefined);
-      D[tb] = nuevos.concat(soloLocal);
+      const soloLocal = (tb==='eventos' && !adm) ? []
+        : local.filter(f => !idsRemotos.has(clave(f)) && prev[clave(f)]===undefined);
+
+      // una sola ficha por clave: gana la que trae nombre completo, rol real y PIN
+      const mapa = new Map();
+      for(const f of nuevos.concat(soloLocal)){
+        const k = clave(f), ya = mapa.get(k);
+        if(!ya){ mapa.set(k, f); continue; }
+        mapa.set(k, tb==='usuarios' ? {
+          ...ya, ...f,
+          nombre: (ya.nombre||'').includes(' ') ? ya.nombre : (f.nombre || ya.nombre),
+          rol: (ya.rol==='jefe' || f.rol==='jefe') ? 'jefe' : (ya.rol || f.rol),
+          admin: !!(ya.admin || f.admin),
+          activo: !!(ya.activo || f.activo),
+          pin: ya.pin || f.pin || ''
+        } : {...ya, ...f});
+      }
+      D[tb] = [...mapa.values()];
     }
     snap = {};
-    for(const [tb,pk] of TABLAS){ snap[tb]={}; for(const f of (D[tb]||[])) snap[tb][String(f[pk])]=JSON.stringify(f); }
+    for(const [tb,pk] of TABLAS){
+      snap[tb]={};
+      for(const f of (D[tb]||[])) snap[tb][tb==='usuarios'?norm(f.correo):String(f[pk])]=JSON.stringify(f);
+    }
     await kvSet('snap', snap);
     await kvSet('data', D);
-    SYNC.pend = 0; SYNC.cuando = new Date(); SYNC.estado='ok';
-    if(manual) toast('Todo sincronizado con la nube.');
+    SYNC.pend = pendientes(snap); SYNC.cuando = new Date();
+    if(adm && rechazos.includes('eventos')){
+      SYNC.estado='error';
+      SYNC.motivo = 'La base rechazó la agenda: tu correo ('+D.sesion+') no está en la política eventos_admin de Supabase.';
+      if(manual) toast(SYNC.motivo);
+    } else {
+      SYNC.estado='ok'; SYNC.motivo=null;
+      if(manual) toast(rechazos.length
+        ? 'Boletas sincronizadas. La agenda solo la edita la administración.'
+        : 'Todo sincronizado con la nube.');
+    }
   }catch(e){
     SYNC.estado='error';
     SYNC.motivo = /PGRST205|404|Could not find/i.test(e.message)
@@ -240,18 +322,17 @@ const USUARIOS = [
  {nombre:'Gerson Salas',cargo:'Administrador',correo:'gerson@stagecore.cl',rol:'jefe',pin:'1234',activo:true,admin:true},
  {nombre:'Alexis Salas',cargo:'Administrador',correo:'alexis@stagecore.cl',rol:'jefe',pin:'1234',activo:true,admin:true}
 ];
-const EVENTOS = [
- {id:'e1',nombre:'Festival Luz Norte',fecha:'2026-08-29',lugar:'Parque Norte, La Serena'},
- {id:'e2',nombre:'Congreso Andes',fecha:'2026-08-26',lugar:'Hotel Cumbres, Santiago'},
- {id:'e3',nombre:'Lanzamiento Molina',fecha:'2026-09-02',lugar:'Teatro Sur, Valparaíso'},
- {id:'e4',nombre:'Gira Arena',fecha:'2026-09-07',lugar:'Arena Monticello'}
-];
+const EVENTOS = [];                 // la agenda la carga la administración
+const DEMO = ['e1','e2','e3','e4']; // eventos de la demostración inicial
 const CATS = ['Transporte','Insumos','Alojamiento','Alimentación','Bodega','Arriendo','Honorarios'];
 const RET_HON = 0.1525; // retención boleta de honorarios — ajustable por año
 const CODIGO_INVITACION = 'SC-2026';
 
 let D = null;                       // datos persistidos
-let U = {view:'login',paso:'inicio',via:'interna',sel:0,pin:'',err:'',tab:'inicio',cap:null,foco:'monto',rend:null,sheet:null,toast:'',firmado:false};
+let U = {view:'login',paso:'inicio',correo:'',pin:'',err:'',intentos:0,bloqueo:0,tab:'inicio',cap:null,foco:'monto',rend:null,sheet:null,toast:'',firmado:false};
+const norm = (c) => String(c==null?'':c).trim().toLowerCase();
+const delLogin = () => (D.usuarios||[]).find(u=>norm(u.correo)===norm(U.correo)) || null;
+const largoPin = () => { const u=delLogin(); return (u && u.pin) ? u.pin.length : 4; };
 
 const esInterna = (u) => /@stagecore\.cl$/i.test(u.correo||'') && !u.externo;
 const codigoActual = () => (D && D.codigo) || CODIGO_INVITACION;
@@ -261,8 +342,8 @@ const uid = () => Math.random().toString(36).slice(2,9);
 const money = (n) => '$' + (Number(n)||0).toLocaleString('es-CL');
 const hoy = () => new Date().toISOString().slice(0,10);
 const esc = (s) => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const yo = () => (D.usuarios||[]).find(u=>u.correo===D.sesion) || null;
-const evActivo = () => (D.eventos||[]).find(e=>e.id===D.eventoActivo) || (D.eventos||[])[0];
+const yo = () => (D.usuarios||[]).find(u=>norm(u.correo)===norm(D.sesion)) || null;
+const evActivo = () => (D.eventos||[]).find(e=>e.id===D.eventoActivo) || (D.eventos||[])[0] || null;
 const misGastos = () => (D.gastos||[]).filter(g=>g.usuario===D.sesion && g.evento===(evActivo()||{}).id);
 
 async function save(){
@@ -276,7 +357,7 @@ function toast(t){ U.toast=t; render(); clearTimeout(window.__t); window.__t=set
 /* ---------- arranque ---------- */
 (async function boot(){
   D = await kvGet('data');
-  if(!D){ D = {v:2,usuarios:USUARIOS.map(u=>({...u})),eventos:EVENTOS.map(e=>({...e})),gastos:[],rendiciones:[],eventoActivo:'e1',sesion:null}; await save(); }
+  if(!D){ D = {v:3,usuarios:USUARIOS.map(u=>({...u})),eventos:[],gastos:[],rendiciones:[],eventoActivo:null,sesion:null}; await save(); }
   D.usuarios = D.usuarios || USUARIOS.map(u=>({...u}));
   D.eventos = D.eventos || EVENTOS.map(e=>({...e}));
   D.gastos = D.gastos || []; D.rendiciones = D.rendiciones || [];
@@ -285,9 +366,54 @@ function toast(t){ U.toast=t; render(); clearTimeout(window.__t); window.__t=set
     D.usuarios = USUARIOS.map(u=>({...u})).concat(invitadas);
     D.v = 2; await save();
   }
-  if(D.sesion && !D.usuarios.some(u=>u.correo===D.sesion)){ D.sesion=null; await save(); }
+  if(D.v < 3){                              // migración: fuera los eventos de demostración sin boletas
+    D.eventos = D.eventos.filter(e => !DEMO.includes(e.id) || (D.gastos||[]).some(g=>g.evento===e.id));
+    if(!D.eventos.some(e=>e.id===D.eventoActivo)) D.eventoActivo = (D.eventos[0]||{}).id || null;
+    D.v = 3; await save();
+  }
+  if(!D.v || D.v < 4){                      // migración: correos en minúsculas, sin duplicados
+    const mapa = new Map();
+    for(const u of D.usuarios){
+      const k = norm(u.correo), ya = mapa.get(k);
+      const fila = {...u, correo:k};
+      if(!ya) mapa.set(k, fila);
+      else mapa.set(k, {                     // se conserva la ficha con datos reales
+        ...ya, ...fila,
+        nombre: (ya.nombre && ya.nombre.includes(' ')) ? ya.nombre : (fila.nombre||ya.nombre),
+        rol: ya.rol==='jefe'||fila.rol==='jefe' ? 'jefe' : (ya.rol||fila.rol),
+        admin: !!(ya.admin || fila.admin),
+        pin: ya.pin || fila.pin,
+        activo: !!(ya.activo || fila.activo)
+      });
+    }
+    D.usuarios = [...mapa.values()];
+    for(const g of (D.gastos||[])) g.usuario = norm(g.usuario);
+    for(const r of (D.rendiciones||[])){
+      r.usuario = norm(r.usuario);
+      for(const g of (r.gastos||[])) g.usuario = norm(g.usuario);
+    }
+    D.sesion = D.sesion ? norm(D.sesion) : null;
+    D.v = 4; await kvSet('snap', null); await save();
+  }
+  if(D.sesion && !D.usuarios.some(u=>norm(u.correo)===norm(D.sesion))){ D.sesion=null; await save(); }
+  const bl = await kvGet('bloqueo');
+  if(bl && bl.hasta > Date.now()){ U.correo=bl.correo||''; U.intentos=bl.intentos||0; U.bloqueo=bl.hasta; }
   U.view = D.sesion ? 'app' : 'login'; U.paso = 'inicio';
   if(D.sesion && yo() && yo().rol==='jefe') U.tab='bandeja';
+
+  // enlace de recuperación del correo: #access_token=…&type=recovery
+  const hash = location.hash;
+  if(hash.includes('access_token')){
+    const p = new URLSearchParams(hash.slice(1));
+    if(p.get('type')==='recovery' && p.get('access_token')){
+      TOKEN = p.get('access_token');
+      if(p.get('refresh_token')) await kvSet('refresh', p.get('refresh_token'));
+      const correo = norm(await sbQuienSoy());
+      history.replaceState(null,'',location.pathname);
+      if(correo){ D.sesion=null; U.view='login'; U.paso='recuperar'; U.correo=correo; U.pin=''; U.err=''; U.bloqueo=0; }
+      else { U.err='El enlace ya venció. Pide otro con "Olvidé mi PIN".'; }
+    }
+  }
   render();
   if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
   SYNC.pend = pendientes(await kvGet('snap'));
@@ -309,76 +435,59 @@ function render(){
 
 /* ---------- login ---------- */
 function vLogin(){
-  const internas = D.usuarios.filter(esInterna), externas = D.usuarios.filter(u=>!esInterna(u));
-  const act = D.usuarios.filter(u=>u.activo).length;
-  let body='';
+  let body='', tit='', sub='';
   if(U.paso==='inicio'){
+    tit='Ingresar'; sub='Escribe el correo con que te registraste';
     body = `<div class="scroll pad">
-      <button data-a="via" data-t="interna" class="card" style="width:100%;display:block;padding:18px">
-        <div style="font-size:16px;font-weight:700">Administración STAGECORE</div>
-        <div class="hint" style="margin-top:7px">Solo los administradores de la empresa</div>
-        <div class="mono" style="font-size:10px;color:#8f7bff;margin-top:10px">${internas.length} CUENTAS</div>
+      <div class="field"><div class="lbl">Correo</div>
+        <input id="lc" type="email" inputmode="email" autocapitalize="off" autocomplete="username"
+          spellcheck="false" placeholder="tu@correo.com" value="${esc(U.correo||'')}"></div>
+      <div class="hint" style="margin-top:12px;${U.err?'color:#e08bc0':''}">${esc(U.err || 'Después te pedimos tu PIN. Nadie ve las cuentas de los demás.')}</div>
+      <button data-a="ir" class="btn" style="margin-top:20px">Continuar</button>
+      <button data-a="ext" style="width:100%;padding:16px 12px;margin-top:12px;border-radius:14px;border:1px dashed #2f3238;text-align:center">
+        <div style="font-size:13px;font-weight:500;color:#c9ccd2">Primera vez · registrarme</div>
+        <div class="hint" style="margin-top:6px">Con el código que te entregó STAGECORE</div>
       </button>
-      <button data-a="via" data-t="externa" class="card" style="width:100%;display:block;padding:18px;margin-top:12px">
-        <div style="font-size:16px;font-weight:700">Personal y externos</div>
-        <div class="hint" style="margin-top:7px">Técnicos, freelance y proveedores · cualquier correo</div>
-        <div class="mono" style="font-size:10px;color:#d8bd7a;margin-top:10px">ENTRADA CON CÓDIGO DE INVITACIÓN</div>
-      </button>
-      <div class="hint" style="margin-top:16px">Las dos vías entran con un PIN de 4 dígitos. Quien carga boletas ve solo las suyas; los administradores revisan, firman y exportan al ERP.</div>
+      <div class="hint" style="margin-top:18px">Quien carga boletas ve solo las suyas. La administración revisa, firma y exporta al ERP.</div>
     </div>`;
-  } else if(U.paso==='usuario'){
-    const lista = D.usuarios.map((u,i)=>({u,i})).filter(x=> U.via==='interna' ? esInterna(x.u) : !esInterna(x.u));
-    body = '<div class="scroll" style="padding:18px 22px 22px"><div style="display:flex;flex-direction:column;gap:9px">'
-      + (lista.length? '' : '<div class="card hint">Todavía no hay cuentas registradas. Regístrate con el código que te dieron.</div>')
-      + lista.map(({u,i})=>`<button data-a="pick" data-i="${i}" class="card row" style="width:100%">
-          <div class="avatar">${esc(ini(u.nombre))}</div>
-          <div style="flex:1;min-width:0;opacity:${u.activo?1:.62}">
-            <div class="name">${esc(u.nombre)}</div>
-            <div class="st mono ${u.activo?'dimc':'warnc'}">${u.activo?esc(u.correo):'INVITADA · fija tu PIN'}</div>
-          </div><div class="dimc">→</div></button>`).join('')
-      + (U.via==='interna' ? '' : `<button data-a="ext" style="width:100%;padding:14px 12px;border-radius:14px;border:1px dashed #2f3238;text-align:center">
-           <div style="font-size:13px;font-weight:500;color:#c9ccd2">Registrar mi cuenta</div>
-           <div class="hint" style="margin-top:6px">Con el código que te entregó STAGECORE</div>
-         </button>`)
-      + '<button data-a="back" class="btn ghost" style="margin-top:6px">Volver</button></div></div>';
   } else if(U.paso==='externo'){
+    tit='Registro con código'; sub='Técnicos, freelance y proveedores';
     body = `<div class="scroll pad">
       <div style="display:flex;flex-direction:column;gap:10px">
-        <div class="field"><div class="lbl">Tu nombre</div><input id="xn" placeholder="Nombre y apellido"></div>
-        <div class="field"><div class="lbl">Correo (cualquiera)</div><input id="xc" type="email" placeholder="tu@correo.com"></div>
-        <div class="field"><div class="lbl">Código de invitación</div><input id="xk" placeholder="SC-2026" class="mono"></div>
+        <div class="field"><div class="lbl">Tu nombre</div><input id="xn" placeholder="Nombre y apellido" autocomplete="name"></div>
+        <div class="field"><div class="lbl">Correo</div><input id="xc" type="email" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="tu@correo.com"></div>
+        <div class="field"><div class="lbl">Código de invitación</div><input id="xk" placeholder="SC-2026" class="mono" autocapitalize="characters"></div>
       </div>
-      <div class="hint" style="margin-top:14px;${U.err?'color:#e08bc0':''}">${U.err?esc(U.err):'Cualquier correo sirve. El código lo entrega operaciones.'}</div>
+      <div class="hint" style="margin-top:14px;${U.err?'color:#e08bc0':''}">${esc(U.err || 'Cualquier correo sirve. El código lo entrega la administración.')}</div>
       <div class="row" style="gap:10px;margin-top:22px">
         <button data-a="back" class="btn ghost">Volver</button>
         <button data-a="extok" class="btn">Continuar</button>
       </div></div>`;
   } else {
-    const u = U.nuevo || D.usuarios[U.sel];
-    const puntos = [0,1,2,3].map(i=>`<div style="width:46px;height:56px;border-radius:12px;background:#16181c;border:1px solid ${U.pin.length===i?'#8f7bff':(U.err?'#4a2c3c':'#22252a')};display:grid;place-items:center;font-size:22px;font-weight:700">${U.pin.length>i?'•':''}</div>`).join('');
+    const n = U.paso==='pin' ? largoPin() : largoPinNuevo();
+    const bloqueado = U.bloqueo > Date.now();
+    const puntos = Array.from({length:n},(_,i)=>`<div style="width:${n>4?38:46}px;height:56px;border-radius:12px;background:#16181c;border:1px solid ${U.pin.length===i?'#8f7bff':(U.err?'#4a2c3c':'#22252a')};display:grid;place-items:center;font-size:22px;font-weight:700">${U.pin.length>i?'•':''}</div>`).join('');
+    tit = U.paso==='pin' ? 'Tu PIN' : 'Crea tu PIN';
+    sub = U.paso==='recuperar' ? 'Recuperación · '+esc(U.correo) : esc(U.correo);
     body = `<div class="scroll" style="display:flex;flex-direction:column">
-      <div class="pad row" style="gap:12px">${puntos}</div>
-      <div class="pad hint" style="padding-top:0;${U.err?'color:#e08bc0':''}">${esc(U.err || (U.paso==='nuevo'?'Elige un PIN de 4 dígitos. Con eso entras siempre.':'Ingresa tu PIN de 4 dígitos.'))}</div>
+      <div class="pad row" style="gap:${n>4?8:12}px">${puntos}</div>
+      <div class="pad hint" style="padding-top:0;${U.err||bloqueado?'color:#e08bc0':''}">${esc(
+        bloqueado ? 'Demasiados intentos. Espera '+Math.ceil((U.bloqueo-Date.now())/1000)+' segundos.'
+        : (U.err || (U.paso==='nuevo' ? 'Elige un PIN de '+n+' dígitos. Con eso entras siempre.' : 'Ingresa tu PIN de '+n+' dígitos.')))}</div>
       <div style="margin-top:auto">
         ${keys('k')}
         <div class="row" style="gap:10px;padding:14px 16px calc(env(safe-area-inset-bottom) + 20px)">
-          <button data-a="back" class="btn ghost">Cambiar</button>
-          <button data-a="enter" class="btn ${U.pin.length===4?'':'off'}">Entrar</button>
+          <button data-a="back" class="btn ghost">Volver</button>
+          <button data-a="enter" class="btn ${U.pin.length===n && !bloqueado?'':'off'}">${U.paso==='pin'?'Entrar':'Guardar PIN'}</button>
         </div>
+        ${U.paso==='pin' ? '<div class="pad" style="padding-top:0;padding-bottom:18px"><button data-a="olvide" class="mono mini" style="color:#8f7bff;text-decoration:underline">Olvidé mi PIN</button></div>' : ''}
       </div></div>`;
   }
-  const t = U.paso==='inicio' ? 'Ingresar'
-    : U.paso==='usuario' ? (U.via==='interna' ? 'Administradores' : 'Cuentas registradas')
-    : U.paso==='externo' ? 'Registro con código'
-    : (U.nuevo?U.nuevo.nombre:D.usuarios[U.sel].nombre);
-  const s = U.paso==='inicio' ? '¿Con qué cuenta entras?'
-    : U.paso==='usuario' ? (U.via==='interna' ? internas.filter(x=>x.activo).length+' de '+internas.length+' activas' : externas.filter(x=>x.activo).length+' de '+externas.length+' activas')
-    : U.paso==='externo' ? 'Técnicos, freelance y proveedores · necesitas el código de invitación'
-    : (U.paso==='nuevo' ? 'Crea tu PIN' : 'Ingresa tu PIN');
   return `<div class="top"><span class="mono">STAGECORE</span><span class="mono">${navigator.onLine?'CONECTADO':'SIN SEÑAL'}</span></div>
     <div style="padding:26px 22px 0"><img src="logo.png" alt="STAGECORE Visual Rental" style="width:150px;height:auto;display:block">
-      <div class="h1" style="margin-top:18px">${esc(t)}</div><div class="sub">${esc(s)}</div></div>${body}`;
+      <div class="h1" style="margin-top:18px">${esc(tit)}</div><div class="sub">${esc(sub)}</div></div>${body}`;
 }
+function largoPinNuevo(){ return 4; }   // se puede reforzar a 6 desde Perfil → Cambiar mi PIN
 function keys(kind){
   const tercera = (U.view==='app' && U.cap && U.foco==='rut') ? 'K' : (U.view==='app' && U.cap && U.foco==='folio' ? '00' : (kind==='k' ? '' : '000'));
   const ks = ['1','2','3','4','5','6','7','8','9',tercera,'0','⌫'];
@@ -420,14 +529,28 @@ function vApp(){
          <button data-a="tab" data-t="perfil" class="${U.tab==='perfil'?'on':''}">PERFIL</button></div>`;
   }
   return `<div class="top"><span class="mono">${navigator.onLine?'CONECTADO':'SIN SEÑAL'}</span>
-      <button data-a="sync" class="mono" style="color:${SYNC.estado==='error'?'#e08bc0':(SYNC.pend?'#8f7bff':'#6a6d73')}">${textoSync()}</button></div>
+      <button data-a="sync" class="mono tocable" style="color:${SYNC.estado==='error'?'#e08bc0':(SYNC.pend?'#8f7bff':'#6a6d73')}">${textoSync()}</button></div>
     <div class="brand"><img src="logo.png" alt="STAGECORE Visual Rental">
       <div class="meta mono">${esc(u.nombre.split(' ')[0].toUpperCase())}<br>${u.admin?'ADMIN':(jefe?'APROBADOR':'CARGA BOLETAS')}</div></div>
     ${body}${nav}`;
 }
 
 function vInicio(){
-  const ev = evActivo(), gs = misGastos();
+  const ev = evActivo();
+  if(!ev){
+    const adm = !!(yo()||{}).admin;
+    return `<div class="scroll pad">
+      <div class="h1">Sin evento activo</div>
+      <div class="sub">${adm?'Agenda el primer evento y aparecerá en el teléfono de todo el equipo.':'Cuando la administración agende un evento podrás cargar tus boletas.'}</div>
+      <div class="card" style="padding:22px;margin-top:18px">
+        <div style="font-size:15px;font-weight:600">Las boletas se cargan dentro de un evento</div>
+        <div class="hint" style="margin-top:8px">Así contabilidad sabe a qué evento cargar cada gasto.</div>
+        ${adm
+          ? '<button data-a="sheet" data-s="nuevoev" class="btn" style="margin-top:16px">Agendar evento</button>'
+          : '<button data-a="tab" data-t="agenda" class="btn ghost" style="margin-top:16px">Ver la agenda</button>'}
+      </div></div>`;
+  }
+  const gs = misGastos();
   const total = gs.reduce((a,g)=>a+g.total,0);
   const listos = gs.filter(g=>g.foto && g.tipo!=='Sin doc.');
   const pct = total? Math.round(listos.reduce((a,g)=>a+g.total,0)/total*100) : 0;
@@ -509,7 +632,7 @@ function vCaptura(){
     </div></div>
     <div style="padding:12px 22px 0"><div class="field"><div class="lbl">${c.tipo==='Honorarios'?'Prestador del servicio':'Proveedor (opcional)'}</div>
       <input value="${esc(c.prov||'')}" oninput="setProv(this.value)" placeholder="${c.tipo==='Honorarios'?'Nombre de quien emite la boleta':'Razón social o nombre'}"></div></div>
-    <div class="rows"><div><span>EVENTO</span><span>${esc(evActivo().nombre)}</span></div>
+    <div class="rows"><div><span>EVENTO</span><span>${esc((evActivo()||{nombre:'Sin evento'}).nombre)}</span></div>
       <div><span>FECHA</span><span>${esc(c.fecha)}</span></div></div>
     </div>
     <div style="flex:none;border-top:1px solid #1c1e22;background:#0e0f11">
@@ -526,13 +649,18 @@ function fmtRut(v){ if(v.length<2) return v; const b=v.slice(0,-1), d=v.slice(-1
 
 function vAgenda(){
   const evs = [...D.eventos].sort((a,b)=>a.fecha<b.fecha?-1:1);
+  const adm = !!(yo()||{}).admin;
   return `<div class="scroll">
-    <div class="pad"><div class="h1">Agenda</div><div class="sub">${evs.length} eventos · toca uno para activarlo o eliminarlo</div></div>
+    <div class="pad"><div class="h1">Agenda</div><div class="sub">${evs.length?evs.length+(evs.length===1?' evento · ':' eventos · ')+(adm?'toca uno para activarlo o eliminarlo':'toca el evento en el que estás trabajando'):'La carga la administración'}</div></div>
+    ${evs.length ? '' : `<div class="pad" style="padding-top:0"><div class="card" style="padding:22px;text-align:center">
+      <div style="font-size:15px;font-weight:600">Aún no hay eventos agendados</div>
+      <div class="hint" style="margin-top:8px">${adm?'Agenda el primero abajo y aparecerá en el teléfono de todo el equipo.':'Cuando la administración agende un evento aparecerá aquí.'}</div>
+    </div></div>`}
     <div class="list" style="padding-top:0">${evs.map(e=>{
       const gs=(D.gastos||[]).filter(g=>g.evento===e.id);
       const t=gs.reduce((a,g)=>a+g.total,0);
       const on = e.id===D.eventoActivo;
-      return `<button data-a="sheet" data-s="evdet" data-id="${e.id}" class="card row" style="width:100%;border-color:${on?'#8f7bff':'#22252a'}">
+      return `<button data-a="${adm?'sheet':'usarev'}" data-s="evdet" data-id="${e.id}" class="card row" style="width:100%;border-color:${on?'#8f7bff':'#22252a'}">
         <div style="width:52px;flex:none;text-align:center">
           <div class="mono" style="font-size:10px;color:#8f7bff">${mes(e.fecha)}</div>
           <div style="font-size:24px;font-weight:700;margin-top:4px">${e.fecha.slice(8,10)}</div></div>
@@ -542,7 +670,9 @@ function vAgenda(){
           <div class="st mono" style="color:#8a8f97">${gs.length} boletas · ${money(t)}</div></div>
         ${on?'<span class="tag" style="background:#241f3d;color:#b9aaff">ACTIVA</span>':''}</button>`;
     }).join('')}</div>
-    <div class="pad"><button data-a="sheet" data-s="nuevoev" class="btn ghost">Agendar evento</button></div></div>`;
+    ${adm
+      ? '<div class="pad"><button data-a="sheet" data-s="nuevoev" class="btn ghost">Agendar evento</button></div>'
+      : '<div class="pad"><div class="hint">Los eventos los agenda la administración. Si falta uno, avísale a Gerson o Alexis.</div></div>'}</div>`;
 }
 function mes(f){return ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'][Number(f.slice(5,7))-1];}
 
@@ -564,7 +694,7 @@ function vPerfil(){
       <button data-a="instalar" class="btn ghost">Instalar en este teléfono</button>
       <button data-a="salir" class="btn ghost">Cerrar sesión</button>
       <div class="hint">Los datos viven en este teléfono. Al enviar una rendición se genera un archivo para el administrador; él lo importa en el suyo.</div>
-      <div class="hint mono">STAGECORE Rendiciones · v17 · nube</div>
+      <div class="hint mono">STAGECORE Rendiciones · v31 · nube</div>
     </div></div>`;
 }
 
@@ -583,10 +713,10 @@ function vBandeja(){
           <div class="name">${esc(r.nombreUsuario||r.usuario)}</div><div class="amt">${money(r.total)}</div></div>
         <div class="st mono dimc">${esc(r.nombreEvento)} · ${r.gastos.length} boletas</div>
         <div class="st mono ${r.estado==='aprobada'?'ok':(r.estado==='devuelta'?'bad':'warnc')}">${r.estado==='aprobada'?'APROBADA · LISTA PARA EL ERP':(r.estado==='devuelta'?'DEVUELTA AL TÉCNICO':'ESPERANDO TU FIRMA')}</div>
-      </button>`).join('') : '<div class="card hint">Sin rendiciones. Importa el archivo que te envió el equipo.</div>'}</div>
+      </button>`).join('') : '<div class="card hint">Sin rendiciones todavía. Aparecen aquí solas cuando el equipo cierra la suya.</div>'}</div>
     <div class="pad" style="display:flex;flex-direction:column;gap:10px">
-      <button data-a="importar" class="btn">Importar rendición recibida</button>
-      <button data-a="csverp" class="btn ghost">Exportar aprobadas al ERP (CSV)</button>
+      <button data-a="csverp" class="btn">Exportar aprobadas al ERP (CSV)</button>
+
     </div></div>`;
 }
 
@@ -634,7 +764,7 @@ function vEquipo(){
     <div class="pad" style="display:flex;flex-direction:column;gap:10px">
       <button data-a="sheet" data-s="invitar" class="btn">Invitar a alguien</button>
       <button data-a="sheet" data-s="codigo" class="btn ghost">Código de invitación: ${esc(codigoActual())}</button>
-      <div class="hint">Toca una cuenta para reiniciar su PIN, suspenderla o eliminarla. Aprobar y exportar al ERP es solo de las cuentas de administración.</div>
+      <div class="hint">Toca una cuenta para enviarle un enlace de PIN nuevo, suspenderla o eliminarla. Aprobar y exportar al ERP es solo de las cuentas de administración.</div>
     </div></div>`;
 }
 
@@ -682,7 +812,7 @@ function vSheet(){
       </div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
         <button data-a="urol" data-id="${esc(x.correo)}" class="btn ghost" style="${x.admin?'':'display:none'}">${x.rol==='jefe'?'Pasar a solo carga':'Dar permiso de aprobar'}</button>
-        <button data-a="upin" data-id="${esc(x.correo)}" class="btn ghost">Reiniciar PIN (vuelve a crearlo)</button>
+        <button data-a="upin" data-id="${esc(x.correo)}" class="btn ghost">Enviar enlace para PIN nuevo</button>
         <button data-a="utog" data-id="${esc(x.correo)}" class="btn ghost">${x.activo?'Suspender acceso':'Reactivar acceso'}</button>
         <button data-a="udel" data-id="${esc(x.correo)}" class="btn warn">Eliminar cuenta</button>
         <button data-a="cerrar" class="btn ghost">Cerrar</button>
@@ -733,7 +863,8 @@ function vSheet(){
   } else if(s.t==='pin'){
     inner = `<div class="h2">Cambiar PIN</div>
       <div class="field" style="margin-top:14px"><div class="lbl">Nuevo PIN (4 dígitos)</div>
-        <input id="np" inputmode="numeric" maxlength="4" placeholder="••••" class="mono"></div>
+        <input id="np" inputmode="numeric" maxlength="6" placeholder="••••" class="mono"></div>
+      <div class="hint" style="margin-top:8px">De 4 a 6 dígitos. Si administras la app, usa 6.</div>
       <div class="row" style="gap:10px;margin-top:16px"><button data-a="cerrar" class="btn ghost">Cancelar</button>
       <button data-a="pinsave" class="btn">Guardar</button></div>`;
   }
@@ -746,67 +877,141 @@ document.addEventListener('click', async (e) => {
   const a = b.dataset.a, u = yo();
   if(a==='bg' && e.target.classList.contains('sheet')){ U.sheet=null; return render(); }
   switch(a){
-    case 'pick': {
-      const i = +b.dataset.i, us = D.usuarios[i];
-      U.sel=i; U.nuevo=null; U.pin=''; U.err=''; U.paso = us.activo? 'pin':'nuevo'; return render();
+    case 'ir': {
+      const c=(document.getElementById('lc').value||'').trim().toLowerCase();
+      if(!/.+@.+\..+/.test(c)){ U.err='Escribe un correo válido.'; return render(); }
+      U.correo=norm(c); U.pin=''; U.err=''; U.nuevo=null;
+      const us=delLogin();
+      U.paso = (us && us.reset) ? 'nuevo' : 'pin';
+      return render();
     }
-    case 'via': U.via=b.dataset.t; U.paso='usuario'; U.err=''; return render();
-    case 'ext': U.paso='externo'; U.err=''; return render();
+    case 'ext': U.paso='externo'; U.err=''; U.nuevo=null; return render();
     case 'extok': {
       const n=(document.getElementById('xn').value||'').trim();
-      const c=(document.getElementById('xc').value||'').trim();
+      const c=(document.getElementById('xc').value||'').trim().toLowerCase();
       const k=(document.getElementById('xk').value||'').trim().toUpperCase();
-      if(n.split(/\s+/).length<2 || !/.+@.+\..+/.test(c) || k!==codigoActual()){ U.err='Datos incompletos o código inválido.'; return render(); }
-      const ya=D.usuarios.findIndex(x=>x.correo===c);
-      if(ya>=0){ U.sel=ya; U.nuevo=null; U.pin=''; U.err='';
-        U.paso=(D.usuarios[ya].activo && D.usuarios[ya].pin)?'pin':'nuevo'; return render(); }
-      U.nuevo={nombre:n,cargo:'Carga boletas · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true};
-      U.paso='nuevo'; U.pin=''; U.err=''; return render();
+      if(n.split(/\s+/).length<2){ U.err='Escribe tu nombre y apellido.'; return render(); }
+      if(!/.+@.+\..+/.test(c)){ U.err='Escribe un correo válido.'; return render(); }
+      if(k!==codigoActual()){ U.err='El código de invitación no es correcto.'; return render(); }
+      U.correo=norm(c); U.pin=''; U.err='';
+      const ya=delLogin();
+      if(ya){ U.nuevo=null; U.paso=(ya.activo && ya.pin)?'pin':'nuevo'; return render(); }
+      U.nuevo={nombre:n,cargo:'Carga boletas · acceso por invitación',correo:norm(c),rol:'campo',pin:'',activo:false,externo:true};
+      U.paso='nuevo'; return render();
     }
-    case 'back': U.paso = (U.paso==='usuario' || U.paso==='externo') ? (U.paso==='externo' ? 'usuario' : 'inicio') : (U.nuevo ? 'externo' : 'usuario'); U.pin=''; U.err=''; if(U.paso!=='externo') U.nuevo=null; return render();
+    case 'back':
+      if(U.paso==='externo'){ U.paso='inicio'; }
+      else { U.paso = U.nuevo ? 'externo' : 'inicio'; }
+      U.pin=''; U.err=''; return render();
+    case 'olvide': {
+      if(!navigator.onLine) return toast('Necesitas señal para recuperar tu PIN.');
+      const r = await sbRecuperar(U.correo);
+      return toast(r.error ? 'No se pudo enviar: '+r.error
+        : 'Te enviamos un correo a '+U.correo+' con el enlace para crear un PIN nuevo.');
+    }
     case 'k': {
-      const k=b.dataset.k;
-      U.err='';
-      if(k==='⌫') U.pin=U.pin.slice(0,-1); else if(U.pin.length<4) U.pin+=k;
+      const n = U.paso==='pin' ? largoPin() : largoPinNuevo();
+      const k=b.dataset.k; U.err='';
+      if(k==='⌫') U.pin=U.pin.slice(0,-1); else if(U.pin.length<n) U.pin+=k;
       return render();
     }
     case 'enter': {
-      if(U.pin.length<4){ U.err='Ingresa los 4 dígitos.'; return render(); }
+      if(U.bloqueo > Date.now()) return render();
+      const n = U.paso==='pin' ? largoPin() : largoPinNuevo();
+      if(U.pin.length<n){ U.err='Ingresa los '+n+' dígitos.'; return render(); }
+
+      if(U.paso==='recuperar'){
+        const r = await sbNuevaClave(U.pin);
+        if(r.error){ U.pin=''; U.err='El enlace ya venció. Pide otro con "Olvidé mi PIN".'; return render(); }
+        const e = await sbEntrar(U.correo, U.pin);
+        if(e.error){ U.pin=''; U.err=e.error; return render(); }
+        let us = delLogin();
+        if(!us){
+          try{
+            const filas = await sbLeer('usuarios');
+            const f = filas.map(x=>x.datos).find(x=>x && norm(x.correo)===norm(U.correo));
+            us = {...(f || {nombre:U.correo.split('@')[0],cargo:'Carga boletas',correo:U.correo,rol:'campo',externo:true}), correo:U.correo};
+            D.usuarios.push(us);
+          }catch(err){ U.err='No pude recuperar tu ficha. Reintenta.'; return render(); }
+        }
+        us.pin=U.pin; us.activo=true; us.reset=false;
+        D.sesion=norm(U.correo); await save();
+        U.view='app'; U.paso='inicio'; U.pin=''; U.err=''; U.intentos=0; U.bloqueo=0; await kvSet('bloqueo', null);
+        U.tab = us.rol==='jefe'?'bandeja':'inicio';
+        sincronizar(false);
+        return toast('PIN nuevo guardado. Hola, '+us.nombre.split(' ')[0]+'.');
+      }
+
       if(U.paso==='nuevo'){
-        const correo = U.nuevo ? U.nuevo.correo : D.usuarios[U.sel].correo;
-        if(navigator.onLine){
-          let r = await sbCrear(correo, U.pin);
-          if(r.error && /already|registered|exists/i.test(r.error)) r = await sbEntrar(correo, U.pin);
+        if(!navigator.onLine){ U.err='Necesitas señal la primera vez en este teléfono.'; return render(); }
+        {
+          let r = await sbCrear(U.correo, U.pin);
+          if(r.error && /already|registered|exists/i.test(r.error)){
+            r = await sbEntrar(U.correo, U.pin);
+            if(r.error){ U.pin=''; U.err='Ese correo ya tiene un PIN. Escribe el que creaste, o pide a la administración que lo reinicie.'; return render(); }
+          }
           if(r.error){ U.err=r.error; return render(); }
           if(!r.sesion){ U.err='Falta desactivar "Confirm email" en Supabase → Authentication → Email.'; return render(); }
         }
-        if(U.nuevo){ D.usuarios.push({...U.nuevo, pin:U.pin, activo:true}); D.sesion=U.nuevo.correo; }
-        else { D.usuarios[U.sel].pin=U.pin; D.usuarios[U.sel].activo=true; D.sesion=D.usuarios[U.sel].correo; }
-        await save(); U.view='app'; U.pin=''; U.nuevo=null; U.tab = yo().rol==='jefe'?'bandeja':'inicio';
+        if(U.nuevo) D.usuarios.push({...U.nuevo, pin:U.pin, activo:true, reset:false});
+        else { const us=delLogin(); us.pin=U.pin; us.activo=true; us.reset=false; }
+        D.sesion=norm(U.correo);
+        await save(); U.view='app'; U.pin=''; U.nuevo=null; U.intentos=0; U.tab = yo().rol==='jefe'?'bandeja':'inicio';
         sincronizar(false);
         return toast('Cuenta activada. Bienvenido, '+yo().nombre.split(' ')[0]+'.');
       }
-      const us=D.usuarios[U.sel];
+
+      const fallo = async (msg) => {
+        U.intentos++; U.pin='';
+        if(U.intentos>=5){ U.bloqueo = Date.now() + Math.min(300, 15*Math.pow(2, U.intentos-5))*1000; U.err=''; }
+        else U.err = msg;
+        await kvSet('bloqueo', {correo:U.correo, intentos:U.intentos, hasta:U.bloqueo});
+        render();
+      };
+
+      let us = delLogin();
       if(navigator.onLine){
-        let r = await sbEntrar(us.correo, U.pin);
+        const r = await sbEntrar(U.correo, U.pin);
         if(r.error){
-          if(U.pin!==us.pin){ U.pin=''; U.err='PIN incorrecto.'; return render(); }
-          r = await sbCrear(us.correo, U.pin);              // cuenta que aún no existía en la nube
-          if(r.ok && !r.sesion){ U.err='Falta desactivar "Confirm email" en Supabase → Authentication → Email.'; return render(); }
+          // la cuenta puede existir solo en este teléfono y aún no en la nube
+          if(us && us.pin && U.pin===us.pin){
+            const c = await sbCrear(U.correo, U.pin);
+            if(c.ok && !c.sesion){ U.err='Falta desactivar "Confirm email" en Supabase → Authentication → Email.'; return render(); }
+            if(c.error){ return fallo('Correo o PIN incorrecto.'); }
+          } else return fallo('Correo o PIN incorrecto.');
+        } else if(!us){
+          // cuenta creada en otro teléfono: traer su ficha de la nube
+          try{
+            const filas = await sbLeer('usuarios');
+            const f = filas.map(x=>x.datos).find(x=>x && norm(x.correo)===norm(U.correo));
+            us = {...(f || {nombre:U.correo.split('@')[0],cargo:'Carga boletas',correo:U.correo,rol:'campo',externo:true}), correo:U.correo, pin:U.pin, activo:true};
+            D.usuarios.push(us);
+          }catch(e){ return fallo('No pude recuperar tu cuenta. Reintenta con señal.'); }
         }
-      } else if(U.pin!==us.pin){ U.pin=''; U.err='PIN incorrecto.'; return render(); }
-      us.pin=U.pin;
-      D.sesion=us.correo; await save(); U.view='app'; U.pin=''; U.tab = us.rol==='jefe'?'bandeja':'inicio';
+      } else {
+        if(!us || !us.pin){ U.pin=''; U.err='Necesitas señal la primera vez en este teléfono.'; return render(); }
+        if(U.pin!==us.pin) return fallo('Correo o PIN incorrecto.');
+      }
+
+      us = delLogin();
+      us.pin=U.pin; us.activo=true; us.reset=false;
+      D.sesion=norm(U.correo); await save();
+      U.view='app'; U.pin=''; U.err=''; U.intentos=0; U.bloqueo=0; await kvSet('bloqueo', null);
+      U.tab = us.rol==='jefe'?'bandeja':'inicio';
       sincronizar(false);
       return toast('Hola, '+us.nombre.split(' ')[0]+'.');
     }
     case 'sync': return sincronizar(true);
-    case 'salir': D.sesion=null; TOKEN=null; await kvSet('refresh',null); await save(); U={...U,view:'login',paso:'inicio',pin:'',err:'',cap:null,rend:null,sheet:null}; return render();
+    case 'salir': D.sesion=null; TOKEN=null; await kvSet('refresh',null); await save();
+      U={...U,view:'login',paso:'inicio',correo:'',pin:'',err:'',nuevo:null,intentos:0,bloqueo:0,cap:null,rend:null,sheet:null}; return render();
     case 'tab': U.tab=b.dataset.t; U.sheet=null; return render();
     case 'sheet': U.sheet={t:b.dataset.s,id:b.dataset.id}; return render();
+    case 'usarev': D.eventoActivo=b.dataset.id; await save(); U.tab='inicio';
+      return toast('Trabajando en '+(D.eventos.find(e=>e.id===b.dataset.id)||{}).nombre+'.');
     case 'cerrar': U.sheet=null; return render();
 
-    case 'cap': U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',prov:'',foto:null,fecha:hoy()}; U.foco='monto'; U.sheet=null; return render();
+    case 'cap': if(!evActivo()){ U.tab='agenda'; render(); return toast('Elige el evento antes de cargar la boleta.'); }
+      U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',prov:'',foto:null,fecha:hoy()}; U.foco='monto'; U.sheet=null; return render();
     case 'capEv': D.eventoActivo=b.dataset.id; await save(); U.sheet=null;
       U.cap={total:0,rut:'',folio:'',tipo:'Boleta',categoria:'Transporte',prov:'',foto:null,fecha:hoy()}; U.foco='monto'; return render();
     case 'capx': U.cap=null; return render();
@@ -831,6 +1036,7 @@ document.addEventListener('click', async (e) => {
       const c=U.cap, sinDoc=c.tipo==='Sin doc.';
       if(c.total<=0) return toast('Ingresa el total del documento.');
       if(!sinDoc && (c.rut.length<8 || !c.folio)) return toast('Contabilidad necesita RUT y folio.');
+      if(!evActivo()) return toast('Primero elige un evento en la Agenda.');
       D.gastos.push({id:uid(),usuario:D.sesion,evento:evActivo().id,total:c.total,tipo:c.tipo,rut:c.rut,folio:c.folio,
         categoria:c.categoria,proveedor:(c.prov||'').trim() || (c.tipo+(c.folio?' #'+c.folio:'')+' · '+c.categoria),foto:c.foto,fecha:c.fecha,estado:'cola'});
       await save(); U.cap=null; U.tab='inicio';
@@ -872,14 +1078,21 @@ document.addEventListener('click', async (e) => {
     }
     case 'upin': {
       const x=D.usuarios.find(z=>z.correo===b.dataset.id);
-      x.pin=''; x.activo=false; await save(); U.sheet=null;
-      return toast('PIN reiniciado. '+x.nombre.split(' ')[0]+' crea uno nuevo al entrar.');
+      if(!x.pin && !x.activo){          // nunca entró: puede crear su PIN directo
+        x.reset=true; await save(); U.sheet=null;
+        return toast(x.nombre.split(' ')[0]+' crea su PIN al entrar con su correo.');
+      }
+      if(!navigator.onLine) return toast('Necesitas señal para enviar el enlace.');
+      const r = await sbRecuperar(x.correo);
+      U.sheet=null;
+      return toast(r.error ? 'No se pudo enviar: '+r.error
+        : 'Enlace enviado a '+x.correo+'. Con ese correo crea su PIN nuevo.');
     }
     case 'utog': {
       const x=D.usuarios.find(z=>z.correo===b.dataset.id);
       if(x.correo===D.sesion) return toast('No puedes suspender tu propia cuenta.');
       if(x.activo && x.rol==='jefe' && D.usuarios.filter(z=>z.rol==='jefe'&&z.activo).length<=1) return toast('Debe quedar al menos un aprobador activo.');
-      x.activo=!x.activo; if(!x.activo) x.pin=''; await save(); U.sheet=null;
+      x.activo=!x.activo; await save(); U.sheet=null;
       return toast(x.activo? 'Acceso reactivado.' : 'Acceso suspendido.');
     }
     case 'udel': {
@@ -901,12 +1114,13 @@ document.addEventListener('click', async (e) => {
       if(D.eventoActivo===id) D.eventoActivo=D.eventos[0].id;
       await save(); U.sheet=null; return toast('Evento eliminado.');
     }
-    case 'evento': D.eventoActivo=b.dataset.id; await save(); U.sheet=null; U.tab='inicio'; return toast('Rendición activa: '+evActivo().nombre);
+    case 'evento': D.eventoActivo=b.dataset.id; await save(); U.sheet=null; U.tab='inicio'; return toast('Rendición activa: '+((evActivo()||{}).nombre||'—'));
     case 'evsave': {
       const n=(document.getElementById('en').value||'').trim();
       const f=document.getElementById('ef').value||hoy();
       const l=(document.getElementById('el').value||'').trim();
       if(!n) return toast('Ponle nombre al evento.');
+      if(!(yo()||{}).admin) return toast('Solo la administración agenda eventos.');
       D.eventos.push({id:uid(),nombre:n,fecha:f,lugar:l||'Por definir'}); await save(); U.sheet=null; return toast('Evento agendado.');
     }
     case 'invsave': {
@@ -914,13 +1128,19 @@ document.addEventListener('click', async (e) => {
       const c=(document.getElementById('ic').value||'').trim();
       if(n.split(/\s+/).length<2 || !/.+@.+\..+/.test(c)) return toast('Falta nombre completo o correo.');
       if(D.usuarios.some(x=>x.correo.toLowerCase()===c.toLowerCase())) return toast('Ya existe una cuenta con ese correo.');
-      D.usuarios.push({nombre:n,cargo:'Carga boletas · acceso por invitación',correo:c,rol:'campo',pin:'',activo:false,externo:true});
+      D.usuarios.push({nombre:n,cargo:'Carga boletas · acceso por invitación',correo:norm(c),rol:'campo',pin:'',activo:false,externo:true,reset:true});
       await save(); U.sheet=null; return toast('Invitada. Entra con el código '+codigoActual()+' y crea su PIN.');
     }
     case 'pinsave': {
       const p=(document.getElementById('np').value||'').trim();
-      if(!/^\d{4}$/.test(p)) return toast('El PIN son 4 dígitos.');
-      D.usuarios.find(x=>x.correo===D.sesion).pin=p; await save(); U.sheet=null; return toast('PIN actualizado.');
+      if(!/^\d{4,6}$/.test(p)) return toast('El PIN son 4, 5 o 6 dígitos.');
+      if(navigator.onLine){
+        if(!TOKEN && !(await sbRetomar())) return toast('Sin sesión en la nube: vuelve a entrar y reintenta.');
+        const r = await fetch(SB.url+'/auth/v1/user',{method:'PUT',headers:hApi(),body:JSON.stringify({password:p+SUFIJO})});
+        if(!r.ok){ const j=await r.json().catch(()=>({})); return toast('La nube rechazó el cambio: '+(j.msg||j.error_description||r.status)); }
+      }
+      yo().pin=p; await save(); U.sheet=null;
+      return toast(navigator.onLine?'PIN actualizado en la nube y en el teléfono.':'PIN actualizado aquí. Se aplicará en la nube al reconectar.');
     }
 
     case 'enviar': {
@@ -930,15 +1150,12 @@ document.addEventListener('click', async (e) => {
         total:gs.reduce((a,g)=>a+g.total,0),gastos:gs.map(g=>({...g})),estado:'enviada',enviada:hoy()};
       gs.forEach(g=>{g.estado='enviado';});
       D.rendiciones.push(r); await save();
-      const blob=new Blob([JSON.stringify({tipo:'rendicion-stagecore',v:1,rendicion:r},null,1)],{type:'application/json'});
-      const file=new File([blob],'rendicion-'+ev.nombre.toLowerCase().replace(/\s+/g,'-')+'.json',{type:'application/json'});
-      try{
-        if(navigator.canShare && navigator.canShare({files:[file]})) await navigator.share({files:[file],title:'Rendición '+ev.nombre});
-        else bajar(blob,file.name);
-      }catch(err){ bajar(blob,file.name); }
-      return toast('Rendición enviada al aprobador.');
+      if(!navigator.onLine) return toast('Rendición cerrada. Se envía sola al recuperar señal.');
+      if(syncCorriendo) await new Promise(res=>{ const e=setInterval(()=>{ if(!syncCorriendo){clearInterval(e);res();} },300); setTimeout(()=>{clearInterval(e);res();},8000); });
+      await sincronizar(false);
+      if(SYNC.estado==='ok' && SYNC.pend===0) return toast('Rendición enviada. Ya está en la bandeja del aprobador.');
+      return toast('Rendición cerrada, pero falta subirla: '+(SYNC.motivo||'sin conexión con la nube.'));
     }
-    case 'importar': document.getElementById('imp').click(); return;
     case 'rend': U.rend=+b.dataset.i; U.firmado=false; return render();
     case 'rendx': U.rend=null; return render();
     case 'sigclr': { const c=document.getElementById('sig'); if(c) c.getContext('2d').clearRect(0,0,c.width,c.height); U.firmado=false; return render(); }
@@ -1011,18 +1228,6 @@ function comprimir(file){
     fr.readAsDataURL(file);
   });
 }
-/* importar rendición */
-document.getElementById('imp').addEventListener('change', async (e) => {
-  const f=e.target.files && e.target.files[0]; e.target.value=''; if(!f) return;
-  try{
-    const j=JSON.parse(await f.text());
-    const r=j.rendicion || j;
-    if(!r || !r.gastos) throw 0;
-    if((D.rendiciones||[]).some(x=>x.id===r.id)) return toast('Esa rendición ya estaba importada.');
-    D.rendiciones.push({...r,estado:r.estado||'enviada'}); await save(); U.tab='bandeja'; render();
-    toast('Rendición de '+(r.nombreUsuario||r.usuario)+' importada.');
-  }catch(err){ toast('Ese archivo no es una rendición válida.'); }
-});
 
 /* firma */
 function initSig(){
