@@ -1,4 +1,5 @@
-const CACHE = 'stagecore-rendiciones-v31';
+const VERSION = 'v35';
+const CACHE = 'stagecore-rendiciones-' + VERSION;
 const ASSETS = [
   './',
   './index.html',
@@ -21,16 +22,43 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Cache-first para el shell: la app abre sin señal.
+self.addEventListener('message', (e) => {
+  if (e.data === 'version' && e.source) e.source.postMessage({ sw: VERSION });
+  if (e.data === 'skipWaiting') self.skipWaiting();
+});
+
+const esHTML = (req) =>
+  req.mode === 'navigate' ||
+  req.destination === 'document' ||
+  /\.html($|\?)/.test(new URL(req.url).pathname) ||
+  new URL(req.url).pathname.endsWith('/');
+
+// La app (HTML) se pide primero a la red para que los cambios se vean al abrir;
+// si no hay señal se responde con la copia guardada. Iconos y logo: caché primero.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then((hit) => {
-      if (hit) return hit;
-      return fetch(e.request)
+  const req = e.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+
+  if (esHTML(req)) {
+    e.respondWith(
+      fetch(req)
         .then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  e.respondWith(
+    caches.match(req).then((hit) => {
+      if (hit) return hit;
+      return fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           return res;
         })
         .catch(() => caches.match('./index.html'));
